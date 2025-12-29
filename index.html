@@ -61,8 +61,8 @@
 
 <script>
 /**
- * 腦力大亂鬥 v3.0
- * 修正：乘法難度、幾何砲台、關卡洗牌、三角形<9、排行榜位置、數字雨隱藏答案
+ * 腦力大亂鬥 v4.0 (Final Fix)
+ * 修正：奪寶搶奪判定、答案生成邏輯、弓箭視覺、排行榜位置
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -94,10 +94,10 @@ let currentMode = null;
 let roundWinner = null;
 let roundInstruction = "";
 
-// 關卡池 (Shuffle Bag)
+// 關卡池
 let modeDeck = []; 
 
-const LEADERBOARD_KEY = 'math_battle_ranking_v3';
+const LEADERBOARD_KEY = 'math_battle_ranking_v4';
 
 // --- 工具函數 ---
 
@@ -134,8 +134,11 @@ window.addEventListener('keydown', (e) => {
     if (['arrowup','arrowdown','arrowleft','arrowright'].includes(key)) player = p2;
 
     if (player && player.stun <= 0) {
+        // 雙擊檢測 (衝刺)
         if (player.lastKey === key && now - player.lastKeyTime < 300) {
             player.dash = true; 
+            // 衝刺狀態持續一段時間，不由按鍵放開決定
+            setTimeout(() => player.dash = false, 500); 
         }
         player.lastKey = key;
         player.lastKeyTime = now;
@@ -147,23 +150,21 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     const key = e.key.toLowerCase();
     keys[key] = false;
-    if (['w','a','s','d'].includes(key)) p1.dash = false;
-    if (['arrowup','arrowdown','arrowleft','arrowright'].includes(key)) p2.dash = false;
+    // 注意：這裡不取消 dash，讓 dash 由時間控制，方便搶奪判定
 });
 
-// --- 題目生成器 (已更新：乘法更早出現) ---
+// --- 題目生成器 ---
 function generateProblem(forceType = -1) {
     const difficulty = Math.min(1, (60 - totalTime) / 50); 
     
     // 0:加減, 1:乘法, 2:數列
-    // 更新：即使是低難度，也有 40% 機率出現簡單乘法
     let type;
     if (forceType !== -1) {
         type = forceType;
     } else {
         let r = Math.random();
         if (difficulty < 0.3) {
-            type = (r > 0.6) ? 1 : 0; // 初期混入乘法
+            type = (r > 0.6) ? 1 : 0; 
         } else if (difficulty < 0.6) {
             type = (r > 0.4) ? 1 : (r > 0.8 ? 2 : 0);
         } else {
@@ -186,9 +187,8 @@ function generateProblem(forceType = -1) {
             q = `${big} - ${small} = ?`;
             a = big - small;
         }
-    } else if (type === 1) { // 乘法 (Level 1 即可出現)
-        // 根據難度調整乘數大小
-        let maxMulti = 3 + Math.floor(difficulty * 8); // 3~11
+    } else if (type === 1) { // 乘法
+        let maxMulti = 3 + Math.floor(difficulty * 8); 
         let n1 = randomInt(2, maxMulti);
         let n2 = randomInt(2, maxMulti);
         q = `${n1} × ${n2} = ?`;
@@ -204,6 +204,8 @@ function generateProblem(forceType = -1) {
         q = seq.join(', ');
     }
 
+    // 生成選項 (確保有正確答案)
+    // 先生成幾個錯誤的
     while(options.length < 3) {
         let offset = randomInt(-5, 5);
         if (offset === 0) continue;
@@ -211,8 +213,13 @@ function generateProblem(forceType = -1) {
         if (wrong < 0) wrong = Math.abs(wrong);
         if (wrong !== a && !options.includes(wrong)) options.push(wrong);
     }
-    options.push(a);
+    // 將正確答案加入，然後在模式中我們會再處理顯示
+    options.push(a); 
+    // 這個 options 陣列包含 4 個元素 (3錯1對)，但有些模式只用 3 個
+    
+    // 為了安全，這裡先打亂
     options.sort(() => Math.random() - 0.5);
+
     return { text: q, answer: a, options: options };
 }
 
@@ -234,7 +241,7 @@ class GameMode {
              player.score += 50;
         }
     }
-    // 繪製帶框的選項
+    
     drawOptionText(val, x, y, keyHint) {
         ctx.beginPath();
         ctx.arc(x, y, 35, 0, Math.PI*2);
@@ -256,7 +263,7 @@ class GameMode {
     }
 }
 
-// Mode 1: 炮台射擊 (已更新：使用幾何圖形代替火箭)
+// Mode 1: 弓箭射擊 (Shooter Mode - Bow & Arrow)
 class ShooterMode extends GameMode {
     constructor() {
         super();
@@ -264,11 +271,15 @@ class ShooterMode extends GameMode {
         this.targets = []; 
         this.p1Angle = 0; this.p2Angle = 0;
         this.p1Cooldown = 0; this.p2Cooldown = 0;
-        this.barrelLen = 50; // 砲管長度
+        this.bowRadius = 40; 
     }
 
     init() {
-        this.problem.options.forEach(opt => {
+        // 取前4個選項(含正確答案)作為目標
+        let pool = this.problem.options.slice(0, 4);
+        // 確保裡面有答案 (generateProblem 返回的 options 已經包含答案)
+        
+        pool.forEach(opt => {
             this.targets.push({
                 x: randomInt(100, 700), y: randomInt(50, 250),
                 vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4,
@@ -281,28 +292,38 @@ class ShooterMode extends GameMode {
 
     update() {
         // P1 Control
-        if (keys['a']) this.p1Angle -= 0.06;
-        if (keys['d']) this.p1Angle += 0.06;
-        this.p1Angle = Math.max(-1.4, Math.min(1.4, this.p1Angle));
+        if (keys['a']) this.p1Angle -= 0.05;
+        if (keys['d']) this.p1Angle += 0.05;
+        this.p1Angle = Math.max(-1.2, Math.min(1.2, this.p1Angle));
         
         if (keys['w'] && this.p1Cooldown <= 0) {
-            // 計算精確的槍口位置
-            let bx = 100 + Math.sin(this.p1Angle) * this.barrelLen;
-            let by = 550 - Math.cos(this.p1Angle) * this.barrelLen;
-            this.bullets.push({x: bx, y: by, vx: Math.sin(this.p1Angle)*12, vy: -Math.cos(this.p1Angle)*12, owner: p1, life: 100});
-            this.p1Cooldown = 20;
+            // 從弓的中心發射
+            let startX = 100 + Math.sin(this.p1Angle) * 20;
+            let startY = 550 - Math.cos(this.p1Angle) * 20;
+            this.bullets.push({
+                x: startX, y: startY, 
+                vx: Math.sin(this.p1Angle)*15, vy: -Math.cos(this.p1Angle)*15, 
+                angle: this.p1Angle,
+                owner: p1, life: 100
+            });
+            this.p1Cooldown = 30; // 射箭間隔稍長
         }
 
         // P2 Control
-        if (keys['arrowleft']) this.p2Angle -= 0.06;
-        if (keys['arrowright']) this.p2Angle += 0.06;
-        this.p2Angle = Math.max(-1.4, Math.min(1.4, this.p2Angle));
+        if (keys['arrowleft']) this.p2Angle -= 0.05;
+        if (keys['arrowright']) this.p2Angle += 0.05;
+        this.p2Angle = Math.max(-1.2, Math.min(1.2, this.p2Angle));
         
         if (keys['arrowup'] && this.p2Cooldown <= 0) {
-            let bx = 700 + Math.sin(this.p2Angle) * this.barrelLen;
-            let by = 550 - Math.cos(this.p2Angle) * this.barrelLen;
-            this.bullets.push({x: bx, y: by, vx: Math.sin(this.p2Angle)*12, vy: -Math.cos(this.p2Angle)*12, owner: p2, life: 100});
-            this.p2Cooldown = 20;
+            let startX = 700 + Math.sin(this.p2Angle) * 20;
+            let startY = 550 - Math.cos(this.p2Angle) * 20;
+            this.bullets.push({
+                x: startX, y: startY, 
+                vx: Math.sin(this.p2Angle)*15, vy: -Math.cos(this.p2Angle)*15, 
+                angle: this.p2Angle,
+                owner: p2, life: 100
+            });
+            this.p2Cooldown = 30;
         }
 
         if (this.p1Cooldown > 0) this.p1Cooldown--;
@@ -315,7 +336,7 @@ class ShooterMode extends GameMode {
             if (t.y < t.r || t.y > 400) t.vy *= -1;
         });
 
-        // Bullets
+        // Arrows (Bullets)
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             let b = this.bullets[i];
             b.x += b.vx; b.y += b.vy; b.life--;
@@ -351,38 +372,71 @@ class ShooterMode extends GameMode {
         ctx.fillStyle = '#7f8c8d';
         this.walls.forEach(w => { ctx.fillRect(w.x, w.y, w.w, w.h); drawEmoji('🧱', w.x + w.w/2, w.y + w.h/2, 20); });
 
-        // Draw Turrets (Geometric)
-        const drawTurret = (x, angle, color, emoji) => {
+        // Draw Bows
+        const drawBow = (x, angle, color, emoji) => {
             ctx.save(); 
             ctx.translate(x, 550); 
             ctx.rotate(angle);
             
-            // 砲管 (長方形)
-            ctx.fillStyle = '#95a5a6';
-            ctx.fillRect(-8, -this.barrelLen, 16, this.barrelLen); 
-            // 裝飾
-            ctx.fillStyle = '#7f8c8d';
-            ctx.fillRect(-10, -this.barrelLen + 10, 20, 5);
+            // 弓臂 (弧線)
+            ctx.beginPath();
+            ctx.arc(0, 10, 40, Math.PI, 0); // 半圓
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = '#d35400'; // 木頭色
+            ctx.stroke();
 
-            // 底座
-            ctx.fillStyle = color;
-            ctx.fillRect(-25, -20, 50, 50); 
-            
+            // 弓弦
+            ctx.beginPath();
+            ctx.moveTo(-40, 10);
+            ctx.lineTo(40, 10);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#ecf0f1';
+            ctx.stroke();
+
             ctx.restore();
-            // 角色圖示
+            // 角色
             drawEmoji(emoji, x, 580, 25);
         };
-        drawTurret(100, this.p1Angle, p1.color, p1.emoji);
-        drawTurret(700, this.p2Angle, p2.color, p2.emoji);
+        drawBow(100, this.p1Angle, p1.color, p1.emoji);
+        drawBow(700, this.p2Angle, p2.color, p2.emoji);
 
+        // Draw Arrows
         this.bullets.forEach(b => {
-            ctx.fillStyle = '#f1c40f';
-            ctx.beginPath(); ctx.arc(b.x, b.y, 6, 0, Math.PI*2); ctx.fill();
+            ctx.save();
+            ctx.translate(b.x, b.y);
+            ctx.rotate(b.angle);
+            
+            // 箭身
+            ctx.beginPath();
+            ctx.moveTo(0, 10);
+            ctx.lineTo(0, -10);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#f1c40f';
+            ctx.stroke();
+            
+            // 箭頭
+            ctx.beginPath();
+            ctx.moveTo(0, -15);
+            ctx.lineTo(-5, -5);
+            ctx.lineTo(5, -5);
+            ctx.closePath();
+            ctx.fillStyle = '#e74c3c';
+            ctx.fill();
+
+            // 箭羽
+            ctx.beginPath();
+            ctx.moveTo(0, 10);
+            ctx.lineTo(-4, 15);
+            ctx.moveTo(0, 10);
+            ctx.lineTo(4, 15);
+            ctx.stroke();
+
+            ctx.restore();
         });
     }
 }
 
-// Mode 2: 數幾何圖形 (已更新：總數 < 9)
+// Mode 2: 數幾何圖形 (< 9)
 class GeometryMode extends GameMode {
     constructor() {
         super();
@@ -399,7 +453,7 @@ class GeometryMode extends GameMode {
         this.problem.answer = count;
         this.structure = { segments: segments, layers: layers };
 
-        // 選項生成
+        // 選項
         this.options = { 'Up': 0, 'Down': 0, 'Left': 0, 'Right': 0 };
         let keys = Object.keys(this.options);
         let correctKey = keys[randomInt(0, 3)];
@@ -458,7 +512,7 @@ class GeometryMode extends GameMode {
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
 
-        // 1. 外框
+        // 畫三角形
         ctx.beginPath();
         ctx.moveTo(topX, topY);
         ctx.lineTo(leftX, baseY);
@@ -466,7 +520,6 @@ class GeometryMode extends GameMode {
         ctx.closePath();
         ctx.stroke();
 
-        // 2. 放射線
         let segs = this.structure.segments;
         for (let i = 1; i < segs; i++) {
             let ratio = i / segs;
@@ -477,7 +530,6 @@ class GeometryMode extends GameMode {
             ctx.stroke();
         }
 
-        // 3. 橫切線
         let lays = this.structure.layers;
         for (let i = 1; i < lays; i++) {
             let ratio = i / lays;
@@ -601,17 +653,30 @@ class ChaseMode extends GameMode {
         this.holder = null;
         this.holdTime = 0;
         this.targetTime = 180;
+        this.stealCooldown = 0; // 搶奪冷卻保護
         
         this.items = [];
-        let answers = this.problem.options.slice(0, 3);
-        answers.forEach((ans, i) => {
+        
+        // --- 修正：確保場上有正確答案 ---
+        // 1. 取得正確答案
+        let correct = this.problem.answer;
+        // 2. 取得所有錯誤答案的選項
+        let wrongOptions = this.problem.options.filter(o => o !== correct);
+        // 3. 取出兩個錯誤答案
+        let wrongs = wrongOptions.slice(0, 2);
+        // 4. 組合出場池 [正確, 錯誤, 錯誤]
+        let pool = [correct, ...wrongs];
+        // 5. 再次打亂
+        pool.sort(() => Math.random() - 0.5);
+        
+        pool.forEach((val, i) => {
             this.items.push({
                 x: randomInt(100, 700),
                 y: randomInt(100, 500),
                 vx: (Math.random() - 0.5) * 2,
                 vy: (Math.random() - 0.5) * 2,
-                val: ans,
-                isCorrect: (ans === this.problem.answer)
+                val: val,
+                isCorrect: (val === correct)
             });
         });
 
@@ -643,10 +708,12 @@ class ChaseMode extends GameMode {
             if (this.holdTime >= this.targetTime) this.checkWin(this.holder);
         }
 
-        this.checkCollisions();
+        // 搶奪判定
+        this.checkSteal();
         
         if(p1.stun > 0) p1.stun--;
         if(p2.stun > 0) p2.stun--;
+        if(this.stealCooldown > 0) this.stealCooldown--;
     }
 
     checkPickUp(player, pos) {
@@ -655,6 +722,7 @@ class ChaseMode extends GameMode {
             if (circleIntersect(pos.x, pos.y, 30, item.x, item.y, 30)) {
                 if (item.isCorrect) {
                     this.holder = player;
+                    this.stealCooldown = 30; // 剛撿到有短暫保護
                 } else {
                     player.stun = 60; 
                     pos.x -= item.vx * 10;
@@ -667,8 +735,10 @@ class ChaseMode extends GameMode {
         if (playerRef.stun > 0) return; 
         let speed = 5;
         if (this.holder === playerRef) speed = 4;
-        if (playerRef.dash && pos.cooldown <= 0) { speed = 12; pos.cooldown = 15; }
-        if (pos.cooldown > 0) { pos.cooldown--; speed = 12; }
+        
+        // 衝刺時速度加倍
+        if (playerRef.dash) speed = 10; 
+        
         if (keys[u]) pos.y -= speed;
         if (keys[d]) pos.y += speed;
         if (keys[l]) pos.x -= speed;
@@ -677,11 +747,33 @@ class ChaseMode extends GameMode {
         pos.y = Math.max(30, Math.min(GAME_HEIGHT - 30, pos.y));
     }
 
-    checkCollisions() {
-        if (circleIntersect(this.p1Pos.x, this.p1Pos.y, 30, this.p2Pos.x, this.p2Pos.y, 30)) {
-            let p1Dashing = p1.dash; let p2Dashing = p2.dash;
-            if (p1Dashing && this.holder === p2) { this.holder = null; this.holdTime = 0; } 
-            else if (p2Dashing && this.holder === p1) { this.holder = null; this.holdTime = 0; }
+    // --- 修正：搶奪邏輯 ---
+    checkSteal() {
+        if (!this.holder || this.stealCooldown > 0) return;
+
+        // 計算兩者距離
+        let dist = Math.sqrt((this.p1Pos.x - this.p2Pos.x)**2 + (this.p1Pos.y - this.p2Pos.y)**2);
+        
+        // 判定半徑稍微寬鬆一點 (50)
+        if (dist < 60) {
+            // P1 搶 P2
+            if (p1.dash && this.holder === p2) {
+                this.holder = p1;
+                this.holdTime = Math.max(0, this.holdTime - 30); // 搶奪會扣一點進度
+                this.stealCooldown = 60; // 1秒保護期
+                // 彈開 P2
+                this.p2Pos.x += (this.p2Pos.x - this.p1Pos.x);
+                this.p2Pos.y += (this.p2Pos.y - this.p1Pos.y);
+            }
+            // P2 搶 P1
+            else if (p2.dash && this.holder === p1) {
+                this.holder = p2;
+                this.holdTime = Math.max(0, this.holdTime - 30);
+                this.stealCooldown = 60;
+                // 彈開 P1
+                this.p1Pos.x += (this.p1Pos.x - this.p2Pos.x);
+                this.p1Pos.y += (this.p1Pos.y - this.p2Pos.y);
+            }
         }
     }
 
@@ -697,6 +789,14 @@ class ChaseMode extends GameMode {
             drawEmoji(p.emoji, pos.x, pos.y, 50);
             if (p.stun > 0) drawEmoji('💫', pos.x, pos.y - 30, 30);
             if (p.dash) drawEmoji('💨', pos.x - 20, pos.y, 30);
+            // 標記持有者
+            if (this.holder === p) {
+                 ctx.beginPath();
+                 ctx.arc(pos.x, pos.y, 35, 0, Math.PI*2);
+                 ctx.strokeStyle = '#f1c40f';
+                 ctx.lineWidth = 3;
+                 ctx.stroke();
+            }
         };
         drawPlayer(p1, this.p1Pos);
         drawPlayer(p2, this.p2Pos);
@@ -719,7 +819,7 @@ class ChaseMode extends GameMode {
     }
 }
 
-// Mode 5: 數字雨 (已更新：隱藏正確答案顏色)
+// Mode 5: 數字雨
 class RainMode extends GameMode {
     constructor() {
         super();
@@ -773,7 +873,6 @@ class RainMode extends GameMode {
         this.items.forEach(item => {
             if (item.type === 'bomb') drawEmoji('💣', item.x, item.y, 40);
             else {
-                // 不區分顏色，全部顯示為白色氣泡
                 ctx.fillStyle = '#ecf0f1';
                 ctx.beginPath(); ctx.arc(item.x, item.y, 25, 0, Math.PI*2); ctx.fill();
                 ctx.fillStyle = 'black'; ctx.font = '20px Arial'; ctx.textBaseline = 'middle'; ctx.fillText(item.val, item.x, item.y);
@@ -788,24 +887,19 @@ function startNewGame() {
     p1.score = 0; p2.score = 0;
     p1.stun = 0; p2.stun = 0;
     totalTime = 60;
-    modeDeck = []; // 重置關卡池
+    modeDeck = []; 
     currentState = STATE.MENU;
 }
 
 function selectNextMode() {
-    // 洗牌機制 (Shuffle Bag)
-    // 如果池子空了，重新填滿 [0, 1, 2, 3, 4]
-    // 這樣保證每 5 關一定會遍歷所有模式各一次
     if (modeDeck.length === 0) {
         modeDeck = [0, 1, 2, 3, 4];
-        // Fisher-Yates Shuffle
         for (let i = modeDeck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [modeDeck[i], modeDeck[j]] = [modeDeck[j], modeDeck[i]];
         }
     }
     
-    // 取出一張牌
     const nextIndex = modeDeck.pop();
     const modes = [ShooterMode, GeometryMode, CubeMode, ChaseMode, RainMode];
     
@@ -866,7 +960,6 @@ function draw() {
     } else if (currentState === STATE.PLAYING) {
         currentMode.draw();
         
-        // HUD
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, GAME_WIDTH, 40); 
         ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = totalTime < 10 ? '#e74c3c' : 'white';
         ctx.font = '20px "Press Start 2P"'; ctx.fillText(`TIME: ${totalTime}`, GAME_WIDTH/2, 28);
@@ -895,7 +988,7 @@ function draw() {
         ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 50px Noto Sans TC'; ctx.fillText(wText, GAME_WIDTH/2, 380);
         ctx.fillStyle = 'white'; ctx.font = '20px Noto Sans TC'; ctx.fillText("按 [空白鍵] 重新開始", GAME_WIDTH/2, 500);
 
-        // 排行榜現在顯示在這裡
+        // 排行榜移至此處
         drawLeaderboard();
     }
 }
@@ -914,7 +1007,7 @@ function drawLeaderboard() {
     ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '16px Noto Sans TC'; ctx.textBaseline = 'alphabetic';
     ctx.fillText("--- 歷史最高分 ---", GAME_WIDTH/2, 550);
     scores.forEach((s, i) => {
-        ctx.fillStyle = '#bdc3c7'; ctx.fillText(`${i+1}. ${s.name} : ${s.score}`, GAME_WIDTH/2, 575 + i*20); // 調整Y座標使其不重疊
+        ctx.fillStyle = '#bdc3c7'; ctx.fillText(`${i+1}. ${s.name} : ${s.score}`, GAME_WIDTH/2, 575 + i*20);
     });
 }
 
