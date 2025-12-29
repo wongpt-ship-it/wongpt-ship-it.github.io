@@ -61,8 +61,8 @@
 
 <script>
 /**
- * 腦力大亂鬥 v2.0
- * 更新：幾何圖形生成、積木顯示修復、奪寶結合數學題、UI置中
+ * 腦力大亂鬥 v2.5
+ * 修正：三角形數量<15、砲台射擊點、關卡循環機制、UI邊框
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -83,7 +83,7 @@ const STATE = {
 let currentState = STATE.MENU;
 let frameCount = 0;
 let totalTime = 60;
-let timeRemaining = 0; // 用於倒計時
+let timeRemaining = 0;
 
 // 玩家配置
 const p1 = { score: 0, color: '#3498db', name: 'Player 1', emoji: '🤖', lastKey: null, lastKeyTime: 0, dash: false, stun: 0 };
@@ -91,10 +91,11 @@ const p2 = { score: 0, color: '#e74c3c', name: 'Player 2', emoji: '🦖', lastKe
 
 const keys = {};
 let currentMode = null;
-let lastModeIndex = -1;
 let roundWinner = null;
 let roundInstruction = "";
-let difficultyLevel = 1;
+
+// 關卡池 (用於保證不重複且遍歷所有模式)
+let modeDeck = [];
 
 const LEADERBOARD_KEY = 'math_battle_ranking_v2';
 
@@ -118,15 +119,6 @@ function drawEmoji(emoji, x, y, size) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(emoji, x, y);
-}
-
-// 繪製圓角矩形背景 (用於文字襯底)
-function drawTextBg(x, y, text, fontSize, padding=10) {
-    ctx.font = `${fontSize}px Noto Sans TC`;
-    let width = ctx.measureText(text).width + padding * 2;
-    let height = fontSize + padding;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(x - width/2, y - height/2, width, height);
 }
 
 // --- 輸入處理 ---
@@ -226,9 +218,31 @@ class GameMode {
              player.score += 50;
         }
     }
+    // 繪製帶框的選項
+    drawOptionText(val, x, y, keyHint) {
+        // 畫外框
+        ctx.beginPath();
+        ctx.arc(x, y, 35, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fill();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#f1c40f'; // 金色邊框
+        ctx.stroke();
+
+        ctx.fillStyle = 'white'; 
+        ctx.font = 'bold 30px Arial'; 
+        ctx.textAlign = 'center'; 
+        ctx.textBaseline = 'middle';
+        ctx.fillText(val, x, y + 2); // 微調垂直位置
+
+        // 按鍵提示
+        ctx.fillStyle = '#bdc3c7'; 
+        ctx.font = '14px Arial'; 
+        ctx.fillText(keyHint, x, y + 55);
+    }
 }
 
-// Mode 1: 炮台射擊 (保持不變，略微優化速度)
+// Mode 1: 炮台射擊
 class ShooterMode extends GameMode {
     constructor() {
         super();
@@ -236,6 +250,7 @@ class ShooterMode extends GameMode {
         this.targets = []; 
         this.p1Angle = 0; this.p2Angle = 0;
         this.p1Cooldown = 0; this.p2Cooldown = 0;
+        this.barrelLen = 45; // 砲管長度 (用於計算發射點)
     }
 
     init() {
@@ -255,8 +270,12 @@ class ShooterMode extends GameMode {
         if (keys['a']) this.p1Angle -= 0.08;
         if (keys['d']) this.p1Angle += 0.08;
         this.p1Angle = Math.max(-1.5, Math.min(1.5, this.p1Angle));
+        
         if (keys['w'] && this.p1Cooldown <= 0) {
-            this.bullets.push({x: 100, y: 550, vx: Math.sin(this.p1Angle)*12, vy: -Math.cos(this.p1Angle)*12, owner: p1, life: 100});
+            // 計算槍口位置 (火箭中心 100, 550)
+            let bx = 100 + Math.sin(this.p1Angle) * this.barrelLen;
+            let by = 550 - Math.cos(this.p1Angle) * this.barrelLen;
+            this.bullets.push({x: bx, y: by, vx: Math.sin(this.p1Angle)*12, vy: -Math.cos(this.p1Angle)*12, owner: p1, life: 100});
             this.p1Cooldown = 20;
         }
 
@@ -264,22 +283,25 @@ class ShooterMode extends GameMode {
         if (keys['arrowleft']) this.p2Angle -= 0.08;
         if (keys['arrowright']) this.p2Angle += 0.08;
         this.p2Angle = Math.max(-1.5, Math.min(1.5, this.p2Angle));
+        
         if (keys['arrowup'] && this.p2Cooldown <= 0) {
-            this.bullets.push({x: 700, y: 550, vx: Math.sin(this.p2Angle)*12, vy: -Math.cos(this.p2Angle)*12, owner: p2, life: 100});
+            let bx = 700 + Math.sin(this.p2Angle) * this.barrelLen;
+            let by = 550 - Math.cos(this.p2Angle) * this.barrelLen;
+            this.bullets.push({x: bx, y: by, vx: Math.sin(this.p2Angle)*12, vy: -Math.cos(this.p2Angle)*12, owner: p2, life: 100});
             this.p2Cooldown = 20;
         }
 
         if (this.p1Cooldown > 0) this.p1Cooldown--;
         if (this.p2Cooldown > 0) this.p2Cooldown--;
 
-        // Targets Move
+        // Targets
         this.targets.forEach(t => {
             t.x += t.vx; t.y += t.vy;
             if (t.x < t.r || t.x > GAME_WIDTH - t.r) t.vx *= -1;
             if (t.y < t.r || t.y > 400) t.vy *= -1;
         });
 
-        // Bullet Logic
+        // Bullets
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             let b = this.bullets[i];
             b.x += b.vx; b.y += b.vy; b.life--;
@@ -303,6 +325,7 @@ class ShooterMode extends GameMode {
         ctx.fillStyle = 'white';
         ctx.font = '30px Noto Sans TC';
         ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
         ctx.fillText(`射擊正確答案: ${this.problem.text}`, GAME_WIDTH/2, 50);
 
         this.targets.forEach(t => {
@@ -317,7 +340,9 @@ class ShooterMode extends GameMode {
         // Draw Turrets
         const drawTurret = (x, angle, emoji) => {
             ctx.save(); ctx.translate(x, 550); ctx.rotate(angle);
-            drawEmoji('🚀', 0, 0, 50); ctx.restore();
+            // 這裡微調火箭位置，讓旋轉中心在火箭底部，頂端在 (0, -45) 左右
+            drawEmoji('🚀', 0, -20, 50); 
+            ctx.restore();
             drawEmoji(emoji, x, 580, 30);
         };
         drawTurret(100, this.p1Angle, p1.emoji);
@@ -327,22 +352,22 @@ class ShooterMode extends GameMode {
     }
 }
 
-// Mode 2: 數幾何圖形 (奧數風格)
+// Mode 2: 數幾何圖形 (修正數量限制)
 class GeometryMode extends GameMode {
     constructor() {
         super();
         this.problem.text = "圖中共有多少個三角形？";
         
-        // 生成奧數三角形邏輯
-        // 一個大三角形，從頂點向下引出 lines 條線 (分割成 lines+1 個區塊)
-        // 橫向有 layers 條線 (分割成 layers+1 層)
-        // 總數公式 = (base_sections * (base_sections + 1) / 2) * horizontal_layers
-        
-        let segments = randomInt(2, 5); // 底邊分段數
-        let layers = randomInt(1, 3);   // 橫向層數 (1 = 只有底邊, 2 = 中間多一條橫線)
-        
-        this.count = (segments * (segments + 1) / 2) * layers;
-        this.problem.answer = this.count;
+        let segments, layers, count;
+        // 嚴格限制總數在 15 以下
+        // 公式: (segments * (segments+1) / 2) * layers
+        do {
+            segments = randomInt(2, 4); // 底邊段數限制 2-4
+            layers = randomInt(1, 2);   // 層數限制 1-2
+            count = (segments * (segments + 1) / 2) * layers;
+        } while (count > 15);
+
+        this.problem.answer = count;
         this.structure = { segments: segments, layers: layers };
 
         // 選項生成
@@ -351,10 +376,10 @@ class GeometryMode extends GameMode {
         let correctKey = keys[randomInt(0, 3)];
         
         keys.forEach(k => {
-            if (k === correctKey) this.options[k] = this.count;
+            if (k === correctKey) this.options[k] = count;
             else {
-                let n = this.count + randomInt(-3, 3);
-                while (n === this.count || n <= 0) n = this.count + randomInt(-4, 4);
+                let n = count + randomInt(-3, 3);
+                while (n === count || n <= 0) n = count + randomInt(-4, 4);
                 this.options[k] = n;
             }
         });
@@ -381,7 +406,7 @@ class GeometryMode extends GameMode {
         } else {
             player.score = Math.max(0, player.score - 10);
             player.lock = true;
-            setTimeout(() => player.lock = false, 500); // 簡單懲罰
+            setTimeout(() => player.lock = false, 500);
         }
     }
 
@@ -389,9 +414,9 @@ class GeometryMode extends GameMode {
         ctx.fillStyle = 'white';
         ctx.font = '30px Noto Sans TC';
         ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
         ctx.fillText(this.problem.text, GAME_WIDTH/2, 60);
 
-        // 繪製奧數三角形
         const topX = GAME_WIDTH / 2;
         const topY = 150;
         const baseY = 450;
@@ -402,8 +427,9 @@ class GeometryMode extends GameMode {
         ctx.strokeStyle = '#f1c40f';
         ctx.lineWidth = 4;
         ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
 
-        // 1. 畫外框
+        // 1. 外框
         ctx.beginPath();
         ctx.moveTo(topX, topY);
         ctx.lineTo(leftX, baseY);
@@ -411,7 +437,7 @@ class GeometryMode extends GameMode {
         ctx.closePath();
         ctx.stroke();
 
-        // 2. 畫頂點放射線
+        // 2. 放射線
         let segs = this.structure.segments;
         for (let i = 1; i < segs; i++) {
             let ratio = i / segs;
@@ -422,37 +448,28 @@ class GeometryMode extends GameMode {
             ctx.stroke();
         }
 
-        // 3. 畫橫切線
-        let lays = this.structure.layers; // 實際層數 (包含底邊)
-        // 如果 layers = 2, 代表中間有一條線，總共 2 層三角形
+        // 3. 橫切線
+        let lays = this.structure.layers;
         for (let i = 1; i < lays; i++) {
             let ratio = i / lays;
-            // 利用相似三角形原理計算橫線端點
             let ly = topY + (baseY - topY) * ratio;
             let lx = topX - (baseWidth / 2) * ratio;
             let rx = topX + (baseWidth / 2) * ratio;
-            
             ctx.beginPath();
             ctx.moveTo(lx, ly);
             ctx.lineTo(rx, ly);
             ctx.stroke();
         }
 
-        // 選項 UI
+        // 繪製帶框的選項
         this.drawOptionText(this.options.Up, GAME_WIDTH/2, 110, '↑ W');
         this.drawOptionText(this.options.Down, GAME_WIDTH/2, 550, '↓ S');
         this.drawOptionText(this.options.Left, 100, 300, '← A');
         this.drawOptionText(this.options.Right, 700, 300, '→ D');
     }
-
-    drawOptionText(val, x, y, keyHint) {
-        ctx.beginPath(); ctx.arc(x, y, 35, 0, Math.PI*2); ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
-        ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 30px Arial'; ctx.textAlign = 'center'; ctx.fillText(val, x, y);
-        ctx.fillStyle = '#bdc3c7'; ctx.font = '14px Arial'; ctx.fillText(keyHint, x, y + 50);
-    }
 }
 
-// Mode 3: 數積木 (修復遮擋問題 + 限制15個)
+// Mode 3: 數積木 (顯示修復 + 數量限制)
 class CubeMode extends GeometryMode {
     constructor() {
         super();
@@ -462,31 +479,27 @@ class CubeMode extends GeometryMode {
         let totalCubes = 0;
         let attempts = 0;
 
-        // 嘗試生成符合 <= 15 個的積木配置
         while (true) {
             this.cubes = [];
             totalCubes = 0;
             // 使用 3x3 網格
             for(let x=0; x<3; x++) {
                 for(let y=0; y<3; y++) {
-                    let h = randomInt(0, 3); // 隨機高度
-                    // 確保不會完全空白
+                    let h = randomInt(0, 3);
                     if(x===1 && y===1 && h===0) h=1; 
-                    
                     for(let z=0; z<h; z++) {
                         this.cubes.push({gx: x, gy: y, gz: z});
                     }
                     totalCubes += h;
                 }
             }
-            if (totalCubes > 1 && totalCubes <= 15) break; // 條件達成
+            if (totalCubes > 1 && totalCubes <= 15) break; 
             attempts++;
-            if (attempts > 100) break; // 防止死循環
+            if (attempts > 100) break;
         }
         
         this.problem.answer = totalCubes;
         
-        // 重新生成選項
         this.options = { 'Up': 0, 'Down': 0, 'Left': 0, 'Right': 0 };
         let keys = Object.keys(this.options);
         let correctKey = keys[randomInt(0, 3)];
@@ -504,14 +517,14 @@ class CubeMode extends GeometryMode {
         ctx.fillStyle = 'white';
         ctx.font = '30px Noto Sans TC';
         ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
         ctx.fillText(this.problem.text, GAME_WIDTH/2, 60);
 
         let originX = GAME_WIDTH / 2;
         let originY = 280;
         let size = 50;
 
-        // 關鍵修復：正確的 Isometric 排序 (Painter's Algorithm)
-        // 順序：先畫後面的 (x+y 較小)，如果 x+y 一樣，畫下面的 (gz 較小)
+        // 畫家演算法排序
         this.cubes.sort((a, b) => {
             let depthA = a.gx + a.gy;
             let depthB = b.gx + b.gy;
@@ -520,13 +533,11 @@ class CubeMode extends GeometryMode {
         });
 
         this.cubes.forEach(c => {
-            // 等軸測投影公式
             let x = (c.gx - c.gy) * size + originX;
             let y = (c.gx + c.gy) * size * 0.5 - (c.gz * size) + originY;
             this.drawCube(x, y, size);
         });
 
-        // UI
         this.drawOptionText(this.options.Up, GAME_WIDTH/2, 110, '↑ W');
         this.drawOptionText(this.options.Down, GAME_WIDTH/2, 550, '↓ S');
         this.drawOptionText(this.options.Left, 100, 300, '← A');
@@ -534,6 +545,8 @@ class CubeMode extends GeometryMode {
     }
 
     drawCube(x, y, size) {
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#2c3e50';
         // Top
         ctx.fillStyle = '#e74c3c'; ctx.beginPath();
         ctx.moveTo(x, y - size); ctx.lineTo(x + size, y - size * 1.5);
@@ -552,21 +565,19 @@ class CubeMode extends GeometryMode {
     }
 }
 
-// Mode 4: 奪寶追逐 (結合數學計算)
+// Mode 4: 奪寶追逐
 class ChaseMode extends GameMode {
     constructor() {
         super();
-        this.problem = generateProblem(); // 生成數學題
+        this.problem = generateProblem(); 
         this.problem.text = "算出答案並搶奪！" + this.problem.text;
         
         this.holder = null;
         this.holdTime = 0;
-        this.targetTime = 180; // 3秒
+        this.targetTime = 180;
         
-        this.items = []; // 存放答案球
-        
-        // 生成 3 個答案球 (1對2錯)
-        let answers = this.problem.options.slice(0, 3); // 取前3個選項
+        this.items = [];
+        let answers = this.problem.options.slice(0, 3);
         answers.forEach((ans, i) => {
             this.items.push({
                 x: randomInt(100, 700),
@@ -586,22 +597,18 @@ class ChaseMode extends GameMode {
         this.movePlayer(this.p1Pos, 'w', 's', 'a', 'd', p1);
         this.movePlayer(this.p2Pos, 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', p2);
 
-        // 物品物理
         this.items.forEach(item => {
-            // 如果被持有，座標跟隨玩家
             if (this.holder && item.isCorrect) {
                  let pos = this.holder === p1 ? this.p1Pos : this.p2Pos;
                  item.x = pos.x;
                  item.y = pos.y - 45;
             } else {
-                // 自然飄動
                 item.x += item.vx; item.y += item.vy;
                 if(item.x < 30 || item.x > GAME_WIDTH-30) item.vx *= -1;
                 if(item.y < 30 || item.y > GAME_HEIGHT-30) item.vy *= -1;
             }
         });
 
-        // 檢測拾取與懲罰
         if (!this.holder) {
             this.checkPickUp(p1, this.p1Pos);
             this.checkPickUp(p2, this.p2Pos);
@@ -610,25 +617,20 @@ class ChaseMode extends GameMode {
             if (this.holdTime >= this.targetTime) this.checkWin(this.holder);
         }
 
-        // 衝刺搶奪
         this.checkCollisions();
         
-        // 暈眩計時
         if(p1.stun > 0) p1.stun--;
         if(p2.stun > 0) p2.stun--;
     }
 
     checkPickUp(player, pos) {
         if (player.stun > 0) return;
-        
         for (let item of this.items) {
             if (circleIntersect(pos.x, pos.y, 30, item.x, item.y, 30)) {
                 if (item.isCorrect) {
                     this.holder = player;
                 } else {
-                    // 搶錯了！暈眩
-                    player.stun = 60; // 1秒
-                    // 推開一點避免連續判定
+                    player.stun = 60; 
                     pos.x -= item.vx * 10;
                 }
             }
@@ -636,36 +638,24 @@ class ChaseMode extends GameMode {
     }
 
     movePlayer(pos, u, d, l, r, playerRef) {
-        if (playerRef.stun > 0) return; // 暈眩中不能動
-
+        if (playerRef.stun > 0) return; 
         let speed = 5;
-        if (this.holder === playerRef) speed = 4; // 持有減速
-
-        if (playerRef.dash && pos.cooldown <= 0) {
-            speed = 12; pos.cooldown = 15;
-        }
+        if (this.holder === playerRef) speed = 4;
+        if (playerRef.dash && pos.cooldown <= 0) { speed = 12; pos.cooldown = 15; }
         if (pos.cooldown > 0) { pos.cooldown--; speed = 12; }
-
         if (keys[u]) pos.y -= speed;
         if (keys[d]) pos.y += speed;
         if (keys[l]) pos.x -= speed;
         if (keys[r]) pos.x += speed;
-
         pos.x = Math.max(30, Math.min(GAME_WIDTH - 30, pos.x));
         pos.y = Math.max(30, Math.min(GAME_HEIGHT - 30, pos.y));
     }
 
     checkCollisions() {
         if (circleIntersect(this.p1Pos.x, this.p1Pos.y, 30, this.p2Pos.x, this.p2Pos.y, 30)) {
-            let p1Dashing = p1.dash;
-            let p2Dashing = p2.dash;
-
-            if (p1Dashing && this.holder === p2) {
-                this.holder = null; this.holdTime = 0;
-            } 
-            else if (p2Dashing && this.holder === p1) {
-                this.holder = null; this.holdTime = 0;
-            }
+            let p1Dashing = p1.dash; let p2Dashing = p2.dash;
+            if (p1Dashing && this.holder === p2) { this.holder = null; this.holdTime = 0; } 
+            else if (p2Dashing && this.holder === p1) { this.holder = null; this.holdTime = 0; }
         }
     }
 
@@ -673,11 +663,10 @@ class ChaseMode extends GameMode {
         ctx.fillStyle = 'white';
         ctx.font = '30px Noto Sans TC';
         ctx.textAlign = 'center';
-        // 顯示算式
+        ctx.textBaseline = 'alphabetic';
         let probPart = this.problem.text.split("！")[1] || this.problem.text;
         ctx.fillText(`算出 ${probPart} 並搶奪！`, GAME_WIDTH/2, 50);
 
-        // 玩家
         const drawPlayer = (p, pos) => {
             drawEmoji(p.emoji, pos.x, pos.y, 50);
             if (p.stun > 0) drawEmoji('💫', pos.x, pos.y - 30, 30);
@@ -686,17 +675,14 @@ class ChaseMode extends GameMode {
         drawPlayer(p1, this.p1Pos);
         drawPlayer(p2, this.p2Pos);
 
-        // 物品
         this.items.forEach(item => {
             ctx.beginPath(); ctx.arc(item.x, item.y, 30, 0, Math.PI*2);
             ctx.fillStyle = '#f39c12'; ctx.fill();
-            ctx.stroke();
-            ctx.fillStyle = 'white'; ctx.font = 'bold 24px Arial';
+            ctx.strokeStyle = '#ecf0f1'; ctx.lineWidth = 3; ctx.stroke();
+            ctx.fillStyle = 'white'; ctx.font = 'bold 24px Arial'; ctx.textBaseline = 'middle';
             ctx.fillText(item.val, item.x, item.y);
-            // 如果是正確答案且沒人持有，畫個光圈提示(可選，這裡不畫增加難度)
         });
 
-        // 進度條
         if (this.holder) {
             ctx.fillStyle = this.holder.color;
             let w = (this.holdTime / this.targetTime) * 300;
@@ -707,13 +693,12 @@ class ChaseMode extends GameMode {
     }
 }
 
-// Mode 5: 數字雨 (保持不變)
+// Mode 5: 數字雨
 class RainMode extends GameMode {
     constructor() {
         super();
         this.items = []; this.spawnTimer = 0;
         this.p1X = 200; this.p2X = 600;
-        // 簡單適配題目
         if(this.problem.text.includes(',')) this.problem = generateProblem(0); 
     }
 
@@ -754,7 +739,7 @@ class RainMode extends GameMode {
     }
 
     draw() {
-        ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center';
+        ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText(`接住正確答案: ${this.problem.text}`, GAME_WIDTH/2, 50);
         drawEmoji(p1.emoji, this.p1X, 550, 60);
         drawEmoji(p2.emoji, this.p2X, 550, 60);
@@ -764,7 +749,7 @@ class RainMode extends GameMode {
             else {
                 ctx.fillStyle = item.type === 'correct' ? '#f1c40f' : '#ecf0f1';
                 ctx.beginPath(); ctx.arc(item.x, item.y, 25, 0, Math.PI*2); ctx.fill();
-                ctx.fillStyle = 'black'; ctx.font = '20px Arial'; ctx.fillText(item.val, item.x, item.y);
+                ctx.fillStyle = 'black'; ctx.font = '20px Arial'; ctx.textBaseline = 'middle'; ctx.fillText(item.val, item.x, item.y);
             }
         });
     }
@@ -776,15 +761,25 @@ function startNewGame() {
     p1.score = 0; p2.score = 0;
     p1.stun = 0; p2.stun = 0;
     totalTime = 60;
-    lastModeIndex = -1;
+    modeDeck = []; // 重置關卡池
     currentState = STATE.MENU;
 }
 
 function selectNextMode() {
+    // 洗牌機制 (Shuffle Bag)
+    // 如果池子空了，重新填滿
+    if (modeDeck.length === 0) {
+        modeDeck = [0, 1, 2, 3, 4];
+        // Shuffle
+        for (let i = modeDeck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [modeDeck[i], modeDeck[j]] = [modeDeck[j], modeDeck[i]];
+        }
+    }
+    
+    // 取出一張牌
+    const nextIndex = modeDeck.pop();
     const modes = [ShooterMode, GeometryMode, CubeMode, ChaseMode, RainMode];
-    let nextIndex = randomInt(0, 4);
-    while (nextIndex === lastModeIndex) nextIndex = randomInt(0, 4);
-    lastModeIndex = nextIndex;
     
     currentMode = new modes[nextIndex]();
     currentMode.init();
@@ -826,7 +821,7 @@ function draw() {
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
     if (currentState === STATE.MENU) {
-        ctx.fillStyle = 'white'; ctx.textAlign = 'center';
+        ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.font = '50px "Press Start 2P"'; ctx.fillText("腦力大亂鬥", GAME_WIDTH/2, 180);
         ctx.font = '24px Noto Sans TC'; ctx.fillText("按 [空白鍵] 開始遊戲", GAME_WIDTH/2, 280);
         
@@ -837,7 +832,7 @@ function draw() {
         drawLeaderboard();
 
     } else if (currentState === STATE.INSTRUCTION) {
-        ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 60px Noto Sans TC'; ctx.textAlign = 'center';
+        ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 60px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(roundInstruction, GAME_WIDTH/2, GAME_HEIGHT/2);
         
     } else if (currentState === STATE.PLAYING) {
@@ -845,7 +840,7 @@ function draw() {
         
         // HUD
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, GAME_WIDTH, 40); 
-        ctx.textAlign = 'center'; ctx.fillStyle = totalTime < 10 ? '#e74c3c' : 'white';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = totalTime < 10 ? '#e74c3c' : 'white';
         ctx.font = '20px "Press Start 2P"'; ctx.fillText(`TIME: ${totalTime}`, GAME_WIDTH/2, 28);
 
         ctx.textAlign = 'left'; ctx.fillStyle = p1.color; ctx.fillText(`${p1.emoji} ${p1.score}`, 20, 28);
@@ -854,14 +849,14 @@ function draw() {
     } else if (currentState === STATE.ROUND_END) {
         currentMode.draw();
         ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-        ctx.fillStyle = 'white'; ctx.font = '60px Noto Sans TC'; ctx.textAlign = 'center';
+        ctx.fillStyle = 'white'; ctx.font = '60px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         if (roundWinner) {
             ctx.fillText(`${roundWinner.emoji} 獲勝!`, GAME_WIDTH/2, GAME_HEIGHT/2);
             ctx.font = '30px Arial'; ctx.fillStyle = '#f1c40f'; ctx.fillText("+100 分", GAME_WIDTH/2, GAME_HEIGHT/2 + 50);
         } else ctx.fillText("時間到!", GAME_WIDTH/2, GAME_HEIGHT/2);
 
     } else if (currentState === STATE.GAME_OVER) {
-        ctx.fillStyle = 'white'; ctx.font = '50px "Press Start 2P"'; ctx.textAlign = 'center';
+        ctx.fillStyle = 'white'; ctx.font = '50px "Press Start 2P"'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText("GAME OVER", GAME_WIDTH/2, 120);
         
         ctx.font = '40px Noto Sans TC';
@@ -885,7 +880,7 @@ function saveScore() {
 
 function drawLeaderboard() {
     let scores = JSON.parse(localStorage.getItem(LEADERBOARD_KEY) || "[]");
-    ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '16px Noto Sans TC';
+    ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '16px Noto Sans TC'; ctx.textBaseline = 'alphabetic';
     ctx.fillText("--- 歷史最高分 ---", GAME_WIDTH/2, 530);
     scores.forEach((s, i) => {
         ctx.fillStyle = '#bdc3c7'; ctx.fillText(`${i+1}. ${s.name} : ${s.score}`, GAME_WIDTH/2, 555 + i*20);
