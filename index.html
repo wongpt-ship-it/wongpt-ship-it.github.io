@@ -61,21 +61,16 @@
 
 <script>
 /**
- * 郭中數鬥大會 v6.0
- * 新增：Logo、退出鍵、三欄結算、勝利者輸入名字、排行榜優化
+ * 郭中數鬥大會 v7.0
+ * 新增：三種特定三角形題目、返回標題防誤觸機制
  */
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-// --- Logo 設定 (請在此處替換您的圖片路徑或 Base64) ---
+// --- Logo 設定 ---
 const logoImage = new Image();
-// 為了讓您直接能看見效果，這裡放一個空的佔位符。
-// 請將您的 Logo 圖片去背後，將檔案放在與html同一層資料夾，並將下一行改為: logoImage.src = 'logo.png';
-logoImage.src = ''; 
-// 或者您可以去 https://www.base64-image.de/ 將圖片轉成 Base64 字串貼在下面：
-// logoImage.src = 'data:image/png;base64,......';
-
+logoImage.src = ''; // 請在此填入您的 Logo 圖片路徑或 Base64
 
 // --- 全局變數 ---
 const GAME_WIDTH = 800;
@@ -87,14 +82,15 @@ const STATE = {
     INSTRUCTION: 1,
     PLAYING: 2,
     ROUND_END: 3,
-    GAME_OVER_INPUT: 4, // 等待輸入名字
-    GAME_OVER_SHOW: 5   // 顯示最終結果
+    GAME_OVER_INPUT: 4,
+    GAME_OVER_SHOW: 5
 };
 
 let currentState = STATE.MENU;
 let frameCount = 0;
 let totalTime = 60;
 let timeRemaining = 0;
+let inputCooldown = 0; // 按鍵冷卻，防止連點
 
 // 玩家配置
 const p1 = { score: 0, color: '#3498db', name: 'Player 1', emoji: '🤖', lastKey: null, lastKeyTime: 0, dash: false, stun: 0 };
@@ -107,11 +103,11 @@ let roundInstruction = "";
 let effects = []; 
 let modeDeck = []; 
 
-// 排行榜與輸入相關
+// 排行榜
 const LEADERBOARD_KEY = 'kywc_math_battle_ranking';
 let winnerName = "";
 let inputActive = false;
-let gameWinner = null; // 'p1', 'p2', or 'draw'
+let gameWinner = null;
 
 // --- 工具函數 ---
 
@@ -135,21 +131,18 @@ function drawEmoji(emoji, x, y, size) {
     ctx.fillText(emoji, x, y);
 }
 
-// 退出按鈕區域
 const exitBtn = { x: 280, y: 10, w: 80, h: 30 };
 
 // --- 輸入處理 ---
 window.addEventListener('keydown', (e) => {
-    // 處理名字輸入 (僅在 GAME_OVER_INPUT 狀態)
+    // 名字輸入
     if (currentState === STATE.GAME_OVER_INPUT && inputActive) {
         if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
             if (winnerName.length < 5) winnerName += e.key.toUpperCase();
         } else if (e.key === 'Backspace') {
             winnerName = winnerName.slice(0, -1);
         } else if (e.key === 'Enter') {
-            if (winnerName.length >= 3) {
-                saveScoreAndProceed();
-            }
+            if (winnerName.length >= 3) saveScoreAndProceed();
         }
         return;
     }
@@ -181,19 +174,95 @@ window.addEventListener('keyup', (e) => {
     keys[key] = false;
 });
 
-// 滑鼠點擊 (處理退出鍵)
 canvas.addEventListener('mousedown', (e) => {
     if (currentState === STATE.PLAYING) {
         const rect = canvas.getBoundingClientRect();
         const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
         const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
-
         if (mouseX >= exitBtn.x && mouseX <= exitBtn.x + exitBtn.w &&
             mouseY >= exitBtn.y && mouseY <= exitBtn.y + exitBtn.h) {
-            startNewGame(); // 直接返回標題
+            goToMenu();
         }
     }
 });
+
+// --- 流程控制 ---
+
+function goToMenu() {
+    currentState = STATE.MENU;
+    inputCooldown = 30; // 進入選單後有 0.5 秒冷卻，防止誤按開始
+    // 重置按鍵狀態
+    for (let k in keys) keys[k] = false;
+}
+
+function startNewGame() {
+    p1.score = 0; p2.score = 0;
+    p1.stun = 0; p2.stun = 0;
+    totalTime = 60;
+    modeDeck = []; 
+    selectNextMode();
+    // startNewGame 不直接設 STATE，由 selectNextMode 設定 INSTRUCTION
+}
+
+function selectNextMode() {
+    if (modeDeck.length === 0) {
+        modeDeck = [0, 1, 2, 3, 4];
+        for (let i = modeDeck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [modeDeck[i], modeDeck[j]] = [modeDeck[j], modeDeck[i]];
+        }
+    }
+    
+    const nextIndex = modeDeck.pop();
+    const modes = [ShooterMode, GeometryMode, CubeMode, ChaseMode, RainMode];
+    
+    currentMode = new modes[nextIndex]();
+    currentMode.init();
+    
+    const instructions = ["射擊正確答案！", "數數三角形！", "數數積木！", "算出答案並搶奪！", "接住正確答案！"];
+    roundInstruction = instructions[nextIndex];
+    
+    currentState = STATE.INSTRUCTION;
+    timeRemaining = 120; 
+}
+
+function endGameRound(winner) {
+    roundWinner = winner;
+    currentState = STATE.ROUND_END;
+    timeRemaining = 60; 
+    effects = [];
+}
+
+function initGameOver() {
+    winnerName = "";
+    inputActive = false;
+    inputCooldown = 30; // 防止結算瞬間誤觸
+    
+    if (p1.score > p2.score) gameWinner = 'p1';
+    else if (p2.score > p1.score) gameWinner = 'p2';
+    else gameWinner = 'draw';
+
+    if (gameWinner !== 'draw') {
+        currentState = STATE.GAME_OVER_INPUT;
+        inputActive = true;
+    } else {
+        currentState = STATE.GAME_OVER_SHOW;
+    }
+}
+
+function saveScoreAndProceed() {
+    if (gameWinner !== 'draw' && winnerName.length >= 3) {
+        let scores = JSON.parse(localStorage.getItem(LEADERBOARD_KEY) || "[]");
+        let score = (gameWinner === 'p1') ? p1.score : p2.score;
+        scores.push({name: winnerName, score: score});
+        scores.sort((a, b) => b.score - a.score);
+        if(scores.length > 10) scores = scores.slice(0, 10);
+        localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(scores));
+    }
+    currentState = STATE.GAME_OVER_SHOW;
+    inputActive = false;
+    inputCooldown = 30; // 切換畫面冷卻
+}
 
 // --- 題目生成器 ---
 function generateProblem(forceType = -1) {
@@ -254,7 +323,7 @@ function generateProblem(forceType = -1) {
     return { text: q, answer: a, options: options };
 }
 
-// --- 遊戲模式類別 ---
+// --- 遊戲模式基類 ---
 class GameMode {
     constructor() {
         this.winner = null;
@@ -272,7 +341,6 @@ class GameMode {
              player.score += 50;
         }
     }
-    
     drawOptionText(val, x, y, keyHint) {
         ctx.beginPath();
         ctx.arc(x, y, 35, 0, Math.PI*2);
@@ -296,121 +364,67 @@ class GameMode {
 
 // Mode 1: 弓箭射擊
 class ShooterMode extends GameMode {
-    constructor() {
-        super();
-        this.bullets = [];
-        this.targets = []; 
-        this.p1Angle = 0; this.p2Angle = 0;
-        this.p1Cooldown = 0; this.p2Cooldown = 0;
-    }
-
+    constructor() { super(); this.bullets = []; this.targets = []; this.p1Angle = 0; this.p2Angle = 0; this.p1Cooldown = 0; this.p2Cooldown = 0; }
     init() {
         let pool = this.problem.options.slice(0, 4);
         pool.forEach(opt => {
             this.targets.push({
-                x: randomInt(100, 700), 
-                y: randomInt(180, 300),
+                x: randomInt(100, 700), y: randomInt(180, 300),
                 vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4,
-                val: opt, r: 25,
-                type: opt === this.problem.answer ? 'correct' : 'wrong'
+                val: opt, r: 25, type: opt === this.problem.answer ? 'correct' : 'wrong'
             });
         });
         this.walls = [{x: 350, y: 300, w: 100, h: 20}, {x: 100, y: 150, w: 20, h: 100}, {x: 680, y: 150, w: 20, h: 100}];
     }
-
     update() {
-        if (keys['a']) this.p1Angle -= 0.05;
-        if (keys['d']) this.p1Angle += 0.05;
+        if (keys['a']) this.p1Angle -= 0.05; if (keys['d']) this.p1Angle += 0.05;
         this.p1Angle = Math.max(-1.2, Math.min(1.2, this.p1Angle));
-        
         if (keys['w'] && this.p1Cooldown <= 0) {
-            let startX = 100 + Math.sin(this.p1Angle) * 20;
-            let startY = 550 - Math.cos(this.p1Angle) * 20;
-            this.bullets.push({
-                x: startX, y: startY, 
-                vx: Math.sin(this.p1Angle)*15, vy: -Math.cos(this.p1Angle)*15, 
-                angle: this.p1Angle,
-                owner: p1, life: 100
-            });
+            this.bullets.push({x: 100 + Math.sin(this.p1Angle)*20, y: 550 - Math.cos(this.p1Angle)*20, vx: Math.sin(this.p1Angle)*15, vy: -Math.cos(this.p1Angle)*15, angle: this.p1Angle, owner: p1, life: 100});
             this.p1Cooldown = 30; 
         }
-
-        if (keys['arrowleft']) this.p2Angle -= 0.05;
-        if (keys['arrowright']) this.p2Angle += 0.05;
+        if (keys['arrowleft']) this.p2Angle -= 0.05; if (keys['arrowright']) this.p2Angle += 0.05;
         this.p2Angle = Math.max(-1.2, Math.min(1.2, this.p2Angle));
-        
         if (keys['arrowup'] && this.p2Cooldown <= 0) {
-            let startX = 700 + Math.sin(this.p2Angle) * 20;
-            let startY = 550 - Math.cos(this.p2Angle) * 20;
-            this.bullets.push({
-                x: startX, y: startY, 
-                vx: Math.sin(this.p2Angle)*15, vy: -Math.cos(this.p2Angle)*15, 
-                angle: this.p2Angle,
-                owner: p2, life: 100
-            });
+            this.bullets.push({x: 700 + Math.sin(this.p2Angle)*20, y: 550 - Math.cos(this.p2Angle)*20, vx: Math.sin(this.p2Angle)*15, vy: -Math.cos(this.p2Angle)*15, angle: this.p2Angle, owner: p2, life: 100});
             this.p2Cooldown = 30;
         }
-
-        if (this.p1Cooldown > 0) this.p1Cooldown--;
-        if (this.p2Cooldown > 0) this.p2Cooldown--;
-
+        if (this.p1Cooldown > 0) this.p1Cooldown--; if (this.p2Cooldown > 0) this.p2Cooldown--;
         this.targets.forEach(t => {
             t.x += t.vx; t.y += t.vy;
-            if (t.x < t.r || t.x > GAME_WIDTH - t.r) t.vx *= -1;
-            if (t.y < t.r || t.y > 400) t.vy *= -1;
+            if (t.x < t.r || t.x > GAME_WIDTH - t.r) t.vx *= -1; if (t.y < t.r || t.y > 400) t.vy *= -1;
         });
-
         for (let i = this.bullets.length - 1; i >= 0; i--) {
-            let b = this.bullets[i];
-            b.x += b.vx; b.y += b.vy; b.life--;
-            if (b.x < 0 || b.x > GAME_WIDTH) b.vx *= -1;
-            if (b.y < 0) b.vy *= -1; 
+            let b = this.bullets[i]; b.x += b.vx; b.y += b.vy; b.life--;
+            if (b.x < 0 || b.x > GAME_WIDTH) b.vx *= -1; if (b.y < 0) b.vy *= -1; 
             this.walls.forEach(w => { if (rectIntersect(b.x, b.y, 5, 5, w.x, w.y, w.w, w.h)) b.vy *= -1; });
-
             for (let t of this.targets) {
                 if (circleIntersect(b.x, b.y, 5, t.x, t.y, t.r)) {
-                    if (t.type === 'correct') this.checkWin(b.owner);
-                    else b.life = 0; 
-                    this.bullets.splice(i, 1);
-                    break;
+                    if (t.type === 'correct') this.checkWin(b.owner); else b.life = 0; 
+                    this.bullets.splice(i, 1); break;
                 }
             }
             if (b.life <= 0 || b.y > 600) this.bullets.splice(i, 1);
         }
     }
-
     draw() {
-        ctx.fillStyle = 'white';
-        ctx.font = '30px Noto Sans TC';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText(`射擊正確答案: ${this.problem.text}`, GAME_WIDTH/2, TEXT_Y_POS);
-
         this.targets.forEach(t => {
-            ctx.fillStyle = '#ecf0f1';
-            ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#ecf0f1'; ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, Math.PI*2); ctx.fill();
             ctx.fillStyle = '#2c3e50'; ctx.font = 'bold 20px Arial'; ctx.textBaseline = 'middle'; ctx.fillText(t.val, t.x, t.y);
         });
-
         ctx.fillStyle = '#7f8c8d';
         this.walls.forEach(w => { ctx.fillRect(w.x, w.y, w.w, w.h); drawEmoji('🧱', w.x + w.w/2, w.y + w.h/2, 20); });
-
-        const drawBow = (x, angle, color, emoji) => {
-            ctx.save(); 
-            ctx.translate(x, 550); 
-            ctx.rotate(angle);
+        const drawBow = (x, angle, emoji) => {
+            ctx.save(); ctx.translate(x, 550); ctx.rotate(angle);
             ctx.beginPath(); ctx.arc(0, 10, 40, Math.PI, 0); ctx.lineWidth = 5; ctx.strokeStyle = '#d35400'; ctx.stroke();
             ctx.beginPath(); ctx.moveTo(-40, 10); ctx.lineTo(40, 10); ctx.lineWidth = 1; ctx.strokeStyle = '#ecf0f1'; ctx.stroke();
-            ctx.restore();
-            drawEmoji(emoji, x, 580, 25);
+            ctx.restore(); drawEmoji(emoji, x, 580, 25);
         };
-        drawBow(100, this.p1Angle, p1.color, p1.emoji);
-        drawBow(700, this.p2Angle, p2.color, p2.emoji);
-
+        drawBow(100, this.p1Angle, p1.emoji); drawBow(700, this.p2Angle, p2.emoji);
         this.bullets.forEach(b => {
-            ctx.save();
-            ctx.translate(b.x, b.y);
-            ctx.rotate(b.angle);
+            ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.angle);
             ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(0, -10); ctx.lineWidth = 2; ctx.strokeStyle = '#f1c40f'; ctx.stroke();
             ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(-5, -5); ctx.lineTo(5, -5); ctx.closePath(); ctx.fillStyle = '#e74c3c'; ctx.fill();
             ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(-4, 15); ctx.moveTo(0, 10); ctx.lineTo(4, 15); ctx.stroke();
@@ -419,23 +433,47 @@ class ShooterMode extends GameMode {
     }
 }
 
-// Mode 2: 數幾何圖形
+// Mode 2: 數幾何圖形 (更新：特定圖形 Preset)
 class GeometryMode extends GameMode {
     constructor() {
         super();
         this.problem.text = "圖中共有多少個三角形？";
-        let segments, layers, count;
-        do {
-            segments = randomInt(2, 3); 
-            layers = randomInt(1, 2);   
-            count = (segments * (segments + 1) / 2) * layers;
-        } while (count > 9);
+        
+        // 0: Random, 1: Grid (12), 2: Triforce (5), 3: Split (5)
+        // 隨機決定是出隨機題還是固定題
+        let seed = Math.random();
+        
+        if (seed < 0.25) {
+            // 原本的隨機生成 (<9)
+            this.preset = 0;
+            let segments, layers, count;
+            do {
+                segments = randomInt(2, 3); layers = randomInt(1, 2);   
+                count = (segments * (segments + 1) / 2) * layers;
+            } while (count > 9);
+            this.problem.answer = count;
+            this.structure = { segments: segments, layers: layers };
+        } else if (seed < 0.5) {
+            // 圖形1：三層格 (類似您提供的第一張圖：中間一橫，直切兩刀)
+            // 公式：Base=3 segments, Layers=2. Answer = 6 * 2 = 12.
+            this.preset = 1;
+            this.problem.answer = 12;
+        } else if (seed < 0.75) {
+            // 圖形2：薩爾達/謝爾賓斯基 (大三角包倒三角)
+            // Answer = 4 small + 1 big = 5.
+            this.preset = 2;
+            this.problem.answer = 5;
+        } else {
+            // 圖形3：不規則分割 (左下連右邊，交點連下邊)
+            // Answer = 5 (LeftTop, BottomRightSmall, BottomMidSmall, BottomComposite, Whole)
+            this.preset = 3;
+            this.problem.answer = 5;
+        }
 
-        this.problem.answer = count;
-        this.structure = { segments: segments, layers: layers };
         this.options = { 'Up': 0, 'Down': 0, 'Left': 0, 'Right': 0 };
         let keys = Object.keys(this.options);
         let correctKey = keys[randomInt(0, 3)];
+        let count = this.problem.answer;
         
         keys.forEach(k => {
             if (k === correctKey) this.options[k] = count;
@@ -448,35 +486,21 @@ class GeometryMode extends GameMode {
     }
 
     update() {
-        if (keys['w']) this.checkAnswer(p1, 'Up');
-        else if (keys['s']) this.checkAnswer(p1, 'Down');
-        else if (keys['a']) this.checkAnswer(p1, 'Left');
-        else if (keys['d']) this.checkAnswer(p1, 'Right');
-
-        if (keys['arrowup']) this.checkAnswer(p2, 'Up');
-        else if (keys['arrowdown']) this.checkAnswer(p2, 'Down');
-        else if (keys['arrowleft']) this.checkAnswer(p2, 'Left');
-        else if (keys['arrowright']) this.checkAnswer(p2, 'Right');
+        if (keys['w']) this.checkAnswer(p1, 'Up'); else if (keys['s']) this.checkAnswer(p1, 'Down');
+        else if (keys['a']) this.checkAnswer(p1, 'Left'); else if (keys['d']) this.checkAnswer(p1, 'Right');
+        if (keys['arrowup']) this.checkAnswer(p2, 'Up'); else if (keys['arrowdown']) this.checkAnswer(p2, 'Down');
+        else if (keys['arrowleft']) this.checkAnswer(p2, 'Left'); else if (keys['arrowright']) this.checkAnswer(p2, 'Right');
     }
 
     checkAnswer(player, dir) {
         if (this.winner === player) return;
         if (player.lock) return;
-
-        if (this.options[dir] === this.problem.answer) {
-            this.checkWin(player);
-        } else {
-            player.score = Math.max(0, player.score - 10);
-            player.lock = true;
-            setTimeout(() => player.lock = false, 500);
-        }
+        if (this.options[dir] === this.problem.answer) this.checkWin(player);
+        else { player.score = Math.max(0, player.score - 10); player.lock = true; setTimeout(() => player.lock = false, 500); }
     }
 
     draw() {
-        ctx.fillStyle = 'white';
-        ctx.font = '30px Noto Sans TC';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText(this.problem.text, GAME_WIDTH/2, TEXT_Y_POS);
 
         const topX = GAME_WIDTH / 2;
@@ -486,27 +510,60 @@ class GeometryMode extends GameMode {
         const leftX = topX - baseWidth / 2;
         const rightX = topX + baseWidth / 2;
 
-        ctx.strokeStyle = '#f1c40f';
-        ctx.lineWidth = 5;
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        
+        // 繪製邏輯分流
+        if (this.preset === 0) { // 隨機
+            ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX, baseY); ctx.lineTo(rightX, baseY); ctx.closePath(); ctx.stroke();
+            let segs = this.structure.segments;
+            for (let i = 1; i < segs; i++) {
+                let r = i / segs;
+                ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX + baseWidth * r, baseY); ctx.stroke();
+            }
+            let lays = this.structure.layers;
+            for (let i = 1; i < lays; i++) {
+                let r = i / lays;
+                ctx.beginPath(); 
+                ctx.moveTo(topX - (baseWidth/2)*r, topY + (baseY-topY)*r); 
+                ctx.lineTo(topX + (baseWidth/2)*r, topY + (baseY-topY)*r); 
+                ctx.stroke();
+            }
+        } else if (this.preset === 1) { // 格子 (12)
+            // 外框
+            ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX, baseY); ctx.lineTo(rightX, baseY); ctx.closePath(); ctx.stroke();
+            // 2條垂直線
+            for(let i=1; i<=2; i++){
+                let r = i/3;
+                ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX + baseWidth*r, baseY); ctx.stroke();
+            }
+            // 1條水平線
+            let midY = (topY + baseY) / 2;
+            let midLx = (topX + leftX) / 2;
+            let midRx = (topX + rightX) / 2;
+            ctx.beginPath(); ctx.moveTo(midLx, midY); ctx.lineTo(midRx, midY); ctx.stroke();
 
-        ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX, baseY); ctx.lineTo(rightX, baseY); ctx.closePath(); ctx.stroke();
+        } else if (this.preset === 2) { // 薩爾達 (5)
+            // 外框
+            ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX, baseY); ctx.lineTo(rightX, baseY); ctx.closePath(); ctx.stroke();
+            // 中點連線
+            let mLeftX = (topX + leftX)/2, mLeftY = (topY + baseY)/2;
+            let mRightX = (topX + rightX)/2, mRightY = (topY + baseY)/2;
+            let mBaseX = topX, mBaseY = baseY;
+            ctx.beginPath();
+            ctx.moveTo(mLeftX, mLeftY); ctx.lineTo(mRightX, mRightY);
+            ctx.lineTo(mBaseX, mBaseY); ctx.closePath();
+            ctx.stroke();
 
-        let segs = this.structure.segments;
-        for (let i = 1; i < segs; i++) {
-            let ratio = i / segs;
-            let targetX = leftX + (baseWidth * ratio);
-            ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(targetX, baseY); ctx.stroke();
-        }
-
-        let lays = this.structure.layers;
-        for (let i = 1; i < lays; i++) {
-            let ratio = i / lays;
-            let ly = topY + (baseY - topY) * ratio;
-            let lx = topX - (baseWidth / 2) * ratio;
-            let rx = topX + (baseWidth / 2) * ratio;
-            ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(rx, ly); ctx.stroke();
+        } else if (this.preset === 3) { // 分割 (5)
+            // 外框 ABC
+            ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(leftX, baseY); ctx.lineTo(rightX, baseY); ctx.closePath(); ctx.stroke();
+            // B -> AC (D)
+            // 假設 D 點在右邊 1/3 處
+            let dX = topX + (rightX - topX) * 0.6; 
+            let dY = topY + (baseY - topY) * 0.6;
+            ctx.beginPath(); ctx.moveTo(leftX, baseY); ctx.lineTo(dX, dY); ctx.stroke();
+            // D -> BC (E) (Vertical down)
+            ctx.beginPath(); ctx.moveTo(dX, dY); ctx.lineTo(dX, baseY); ctx.stroke();
         }
 
         this.drawOptionText(this.options.Up, GAME_WIDTH/2, 120, '↑ W');
@@ -520,32 +577,27 @@ class GeometryMode extends GameMode {
 class CubeMode extends GeometryMode {
     constructor() {
         super();
+        this.preset = -1; // reset preset
         this.problem.text = "數數有多少個積木？";
         this.cubes = [];
         let totalCubes = 0;
         let attempts = 0;
         while (true) {
-            this.cubes = [];
-            totalCubes = 0;
+            this.cubes = []; totalCubes = 0;
             for(let x=0; x<3; x++) {
                 for(let y=0; y<3; y++) {
                     let h = randomInt(0, 3);
                     if(x===1 && y===1 && h===0) h=1; 
-                    for(let z=0; z<h; z++) {
-                        this.cubes.push({gx: x, gy: y, gz: z});
-                    }
+                    for(let z=0; z<h; z++) this.cubes.push({gx: x, gy: y, gz: z});
                     totalCubes += h;
                 }
             }
             if (totalCubes > 1 && totalCubes <= 15) break; 
-            attempts++;
-            if (attempts > 100) break;
+            attempts++; if (attempts > 100) break;
         }
-        
         this.problem.answer = totalCubes;
         this.options = { 'Up': 0, 'Down': 0, 'Left': 0, 'Right': 0 };
-        let keys = Object.keys(this.options);
-        let correctKey = keys[randomInt(0, 3)];
+        let keys = Object.keys(this.options); let correctKey = keys[randomInt(0, 3)];
         keys.forEach(k => {
             if (k === correctKey) this.options[k] = totalCubes;
             else {
@@ -555,40 +607,25 @@ class CubeMode extends GeometryMode {
             }
         });
     }
-
     draw() {
-        ctx.fillStyle = 'white';
-        ctx.font = '30px Noto Sans TC';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText(this.problem.text, GAME_WIDTH/2, TEXT_Y_POS);
-
-        let originX = GAME_WIDTH / 2;
-        let originY = 380; 
-        let size = 40;     
-
+        let originX = GAME_WIDTH / 2; let originY = 380; let size = 40;     
         this.cubes.sort((a, b) => {
-            let depthA = a.gx + a.gy;
-            let depthB = b.gx + b.gy;
-            if (depthA !== depthB) return depthA - depthB;
-            return a.gz - b.gz;
+            let depthA = a.gx + a.gy; let depthB = b.gx + b.gy;
+            if (depthA !== depthB) return depthA - depthB; return a.gz - b.gz;
         });
-
         this.cubes.forEach(c => {
-            let x = (c.gx - c.gy) * size + originX;
-            let y = (c.gx + c.gy) * size * 0.5 - (c.gz * size) + originY;
+            let x = (c.gx - c.gy) * size + originX; let y = (c.gx + c.gy) * size * 0.5 - (c.gz * size) + originY;
             this.drawCube(x, y, size);
         });
-
         this.drawOptionText(this.options.Up, GAME_WIDTH/2, 120, '↑ W');
         this.drawOptionText(this.options.Down, GAME_WIDTH/2, 550, '↓ S');
         this.drawOptionText(this.options.Left, 100, 300, '← A');
         this.drawOptionText(this.options.Right, 700, 300, '→ D');
     }
-
     drawCube(x, y, size) {
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = '#2c3e50';
+        ctx.lineWidth = 1; ctx.strokeStyle = '#2c3e50';
         ctx.fillStyle = '#e74c3c'; ctx.beginPath(); ctx.moveTo(x, y - size); ctx.lineTo(x + size, y - size * 1.5); ctx.lineTo(x, y - size * 2); ctx.lineTo(x - size, y - size * 1.5); ctx.fill(); ctx.stroke();
         ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.moveTo(x, y - size); ctx.lineTo(x + size, y - size * 1.5); ctx.lineTo(x + size, y - size * 0.5); ctx.lineTo(x, y); ctx.fill(); ctx.stroke();
         ctx.fillStyle = '#e67e22'; ctx.beginPath(); ctx.moveTo(x, y - size); ctx.lineTo(x - size, y - size * 1.5); ctx.lineTo(x - size, y - size * 0.5); ctx.lineTo(x, y); ctx.fill(); ctx.stroke();
@@ -599,158 +636,70 @@ class CubeMode extends GeometryMode {
 class ChaseMode extends GameMode {
     constructor() {
         super();
-        this.problem = generateProblem(); 
-        this.problem.text = "算出答案並搶奪！" + this.problem.text;
-        
-        this.holder = null;
-        this.holdTime = 0;
-        this.targetTime = 180;
-        this.stealCooldown = 0; 
-        
-        this.items = [];
-        
-        let correct = this.problem.answer;
-        let others = this.problem.options.filter(o => o !== correct);
-        while (others.length < 2) {
-             let w = correct + randomInt(1, 5);
-             if (!others.includes(w) && w !== correct) others.push(w);
-        }
-        
-        let pool = [correct, others[0], others[1]];
-        pool.sort(() => Math.random() - 0.5);
-        
+        this.problem = generateProblem(); this.problem.text = "算出答案並搶奪！" + this.problem.text;
+        this.holder = null; this.holdTime = 0; this.targetTime = 180; this.stealCooldown = 0; this.items = [];
+        let correct = this.problem.answer; let others = this.problem.options.filter(o => o !== correct);
+        while (others.length < 2) { let w = correct + randomInt(1, 5); if (!others.includes(w) && w !== correct) others.push(w); }
+        let pool = [correct, others[0], others[1]]; pool.sort(() => Math.random() - 0.5);
         pool.forEach((val) => {
-            this.items.push({
-                x: randomInt(100, 700),
-                y: randomInt(180, 500), 
-                vx: (Math.random() - 0.5) * 2,
-                vy: (Math.random() - 0.5) * 2,
-                val: val,
-                isCorrect: (val === correct)
-            });
+            this.items.push({ x: randomInt(100, 700), y: randomInt(180, 500), vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, val: val, isCorrect: (val === correct) });
         });
-
-        this.p1Pos = { x: 150, y: 300, cooldown: 0 };
-        this.p2Pos = { x: 650, y: 300, cooldown: 0 };
+        this.p1Pos = { x: 150, y: 300, cooldown: 0 }; this.p2Pos = { x: 650, y: 300, cooldown: 0 };
     }
-
     update() {
-        this.movePlayer(this.p1Pos, 'w', 's', 'a', 'd', p1);
-        this.movePlayer(this.p2Pos, 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', p2);
-
+        this.movePlayer(this.p1Pos, 'w', 's', 'a', 'd', p1); this.movePlayer(this.p2Pos, 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', p2);
         this.items.forEach(item => {
-            if (this.holder && item.isCorrect) {
-                 let pos = this.holder === p1 ? this.p1Pos : this.p2Pos;
-                 item.x = pos.x;
-                 item.y = pos.y - 45;
-            } else {
-                item.x += item.vx; item.y += item.vy;
-                if(item.x < 30 || item.x > GAME_WIDTH-30) item.vx *= -1;
-                if(item.y < 30 || item.y > GAME_HEIGHT-30) item.vy *= -1;
-            }
+            if (this.holder && item.isCorrect) { let pos = this.holder === p1 ? this.p1Pos : this.p2Pos; item.x = pos.x; item.y = pos.y - 45; }
+            else { item.x += item.vx; item.y += item.vy; if(item.x < 30 || item.x > GAME_WIDTH-30) item.vx *= -1; if(item.y < 30 || item.y > GAME_HEIGHT-30) item.vy *= -1; }
         });
-
-        if (!this.holder) {
-            this.checkPickUp(p1, this.p1Pos);
-            this.checkPickUp(p2, this.p2Pos);
-        } else {
-            this.holdTime++;
-            if (this.holdTime >= this.targetTime) this.checkWin(this.holder);
-        }
-
+        if (!this.holder) { this.checkPickUp(p1, this.p1Pos); this.checkPickUp(p2, this.p2Pos); }
+        else { this.holdTime++; if (this.holdTime >= this.targetTime) this.checkWin(this.holder); }
         this.checkSteal();
-        
-        if(p1.stun > 0) p1.stun--;
-        if(p2.stun > 0) p2.stun--;
-        if(this.stealCooldown > 0) this.stealCooldown--;
+        if(p1.stun > 0) p1.stun--; if(p2.stun > 0) p2.stun--; if(this.stealCooldown > 0) this.stealCooldown--;
     }
-
     checkPickUp(player, pos) {
         if (player.stun > 0) return;
         for (let item of this.items) {
             if (circleIntersect(pos.x, pos.y, 30, item.x, item.y, 30)) {
-                if (item.isCorrect) {
-                    this.holder = player;
-                    this.stealCooldown = 30; 
-                } else {
-                    player.stun = 60; 
-                    pos.x -= item.vx * 10;
-                }
+                if (item.isCorrect) { this.holder = player; this.stealCooldown = 30; } else { player.stun = 60; pos.x -= item.vx * 10; }
             }
         }
     }
-
     movePlayer(pos, u, d, l, r, playerRef) {
         if (playerRef.stun > 0) return; 
-        let speed = 5;
-        if (this.holder === playerRef) speed = 4;
-        if (playerRef.dash) speed = 10; 
-        
-        if (keys[u]) pos.y -= speed;
-        if (keys[d]) pos.y += speed;
-        if (keys[l]) pos.x -= speed;
-        if (keys[r]) pos.x += speed;
-        pos.x = Math.max(30, Math.min(GAME_WIDTH - 30, pos.x));
-        pos.y = Math.max(30, Math.min(GAME_HEIGHT - 30, pos.y));
+        let speed = 5; if (this.holder === playerRef) speed = 4; if (playerRef.dash) speed = 10; 
+        if (keys[u]) pos.y -= speed; if (keys[d]) pos.y += speed; if (keys[l]) pos.x -= speed; if (keys[r]) pos.x += speed;
+        pos.x = Math.max(30, Math.min(GAME_WIDTH - 30, pos.x)); pos.y = Math.max(30, Math.min(GAME_HEIGHT - 30, pos.y));
     }
-
     checkSteal() {
         if (!this.holder || this.stealCooldown > 0) return;
-
         let dist = Math.sqrt((this.p1Pos.x - this.p2Pos.x)**2 + (this.p1Pos.y - this.p2Pos.y)**2);
-        
         if (dist < 80) {
-            if (p1.dash && this.holder === p2) {
-                this.performSteal(p1, p2, this.p2Pos);
-            }
-            else if (p2.dash && this.holder === p1) {
-                this.performSteal(p2, p1, this.p1Pos);
-            }
+            if (p1.dash && this.holder === p2) this.performSteal(p1, p2, this.p2Pos);
+            else if (p2.dash && this.holder === p1) this.performSteal(p2, p1, this.p1Pos);
         }
     }
-
     performSteal(stealer, victim, victimPos) {
-        this.holder = stealer;
-        this.holdTime = Math.max(0, this.holdTime - 30);
-        this.stealCooldown = 60; 
-        victimPos.x += (stealer === p1 ? 60 : -60);
-        effects.push({text: "STEAL!", x: victimPos.x, y: victimPos.y, life: 30});
+        this.holder = stealer; this.holdTime = Math.max(0, this.holdTime - 30); this.stealCooldown = 60; 
+        victimPos.x += (stealer === p1 ? 60 : -60); effects.push({text: "STEAL!", x: victimPos.x, y: victimPos.y, life: 30});
     }
-
     draw() {
-        ctx.fillStyle = 'white';
-        ctx.font = '30px Noto Sans TC';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
-        let probPart = this.problem.text.split("！")[1] || this.problem.text;
-        ctx.fillText(`算出 ${probPart} 並搶奪！`, GAME_WIDTH/2, TEXT_Y_POS);
-
+        ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        let probPart = this.problem.text.split("！")[1] || this.problem.text; ctx.fillText(`算出 ${probPart} 並搶奪！`, GAME_WIDTH/2, TEXT_Y_POS);
         const drawPlayer = (p, pos) => {
             drawEmoji(p.emoji, pos.x, pos.y, 50);
-            if (p.stun > 0) drawEmoji('💫', pos.x, pos.y - 30, 30);
-            if (p.dash) drawEmoji('💨', pos.x - 20, pos.y, 30);
-            if (this.holder === p) {
-                 ctx.beginPath(); ctx.arc(pos.x, pos.y, 35, 0, Math.PI*2);
-                 ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3; ctx.stroke();
-            }
+            if (p.stun > 0) drawEmoji('💫', pos.x, pos.y - 30, 30); if (p.dash) drawEmoji('💨', pos.x - 20, pos.y, 30);
+            if (this.holder === p) { ctx.beginPath(); ctx.arc(pos.x, pos.y, 35, 0, Math.PI*2); ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3; ctx.stroke(); }
         };
-        drawPlayer(p1, this.p1Pos);
-        drawPlayer(p2, this.p2Pos);
-
+        drawPlayer(p1, this.p1Pos); drawPlayer(p2, this.p2Pos);
         this.items.forEach(item => {
             ctx.beginPath(); ctx.arc(item.x, item.y, 30, 0, Math.PI*2);
-            ctx.fillStyle = '#f39c12'; ctx.fill();
-            ctx.strokeStyle = '#ecf0f1'; ctx.lineWidth = 3; ctx.stroke();
-            ctx.fillStyle = 'white'; ctx.font = 'bold 24px Arial'; ctx.textBaseline = 'middle';
-            ctx.fillText(item.val, item.x, item.y);
+            ctx.fillStyle = '#f39c12'; ctx.fill(); ctx.strokeStyle = '#ecf0f1'; ctx.lineWidth = 3; ctx.stroke();
+            ctx.fillStyle = 'white'; ctx.font = 'bold 24px Arial'; ctx.textBaseline = 'middle'; ctx.fillText(item.val, item.x, item.y);
         });
-
         if (this.holder) {
-            ctx.fillStyle = this.holder.color;
-            let w = (this.holdTime / this.targetTime) * 300;
-            ctx.fillRect(GAME_WIDTH/2 - 150, 80, w, 20);
-            ctx.strokeStyle = 'white'; ctx.lineWidth = 2;
-            ctx.strokeRect(GAME_WIDTH/2 - 150, 80, 300, 20);
+            ctx.fillStyle = this.holder.color; let w = (this.holdTime / this.targetTime) * 300;
+            ctx.fillRect(GAME_WIDTH/2 - 150, 80, w, 20); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.strokeRect(GAME_WIDTH/2 - 150, 80, 300, 20);
         }
     }
 }
@@ -758,33 +707,20 @@ class ChaseMode extends GameMode {
 // Mode 5: 數字雨
 class RainMode extends GameMode {
     constructor() {
-        super();
-        this.items = []; this.spawnTimer = 0;
-        this.p1X = 200; this.p2X = 600;
+        super(); this.items = []; this.spawnTimer = 0; this.p1X = 200; this.p2X = 600;
         if(this.problem.text.includes(',')) this.problem = generateProblem(0); 
     }
-
     update() {
-        if (keys['a']) this.p1X -= 8;
-        if (keys['d']) this.p1X += 8;
-        if (keys['arrowleft']) this.p2X -= 8;
-        if (keys['arrowright']) this.p2X += 8;
-
-        this.p1X = Math.max(30, Math.min(GAME_WIDTH - 30, this.p1X));
-        this.p2X = Math.max(30, Math.min(GAME_WIDTH - 30, this.p2X));
-
+        if (keys['a']) this.p1X -= 8; if (keys['d']) this.p1X += 8;
+        if (keys['arrowleft']) this.p2X -= 8; if (keys['arrowright']) this.p2X += 8;
+        this.p1X = Math.max(30, Math.min(GAME_WIDTH - 30, this.p1X)); this.p2X = Math.max(30, Math.min(GAME_WIDTH - 30, this.p2X));
         this.spawnTimer++;
         if (this.spawnTimer > 40) {
-            this.spawnTimer = 0;
-            let r = Math.random();
-            let type = 'wrong'; let val = 0;
-            if (r > 0.7) { type = 'correct'; val = this.problem.answer; }
-            else if (r < 0.2) { type = 'bomb'; val = ''; }
+            this.spawnTimer = 0; let r = Math.random(); let type = 'wrong'; let val = 0;
+            if (r > 0.7) { type = 'correct'; val = this.problem.answer; } else if (r < 0.2) { type = 'bomb'; val = ''; }
             else { val = this.problem.answer + randomInt(1, 10) * (Math.random()>0.5?1:-1); }
-
             this.items.push({ x: randomInt(30, GAME_WIDTH - 30), y: -30, type: type, val: val, speed: 3 + Math.random() * 3 });
         }
-
         for (let i = this.items.length - 1; i >= 0; i--) {
             let item = this.items[i]; item.y += item.speed;
             if (Math.abs(item.x - this.p1X) < 40 && Math.abs(item.y - 550) < 40) { this.handleCatch(p1, item, i); continue; }
@@ -792,105 +728,35 @@ class RainMode extends GameMode {
             if (item.y > GAME_HEIGHT) this.items.splice(i, 1);
         }
     }
-
     handleCatch(player, item, index) {
         this.items.splice(index, 1);
-        if (item.type === 'correct') this.checkWin(player);
-        else if (item.type === 'bomb') player.score = Math.max(0, player.score - 50);
-        else player.score = Math.max(0, player.score - 10);
+        if (item.type === 'correct') this.checkWin(player); else if (item.type === 'bomb') player.score = Math.max(0, player.score - 50); else player.score = Math.max(0, player.score - 10);
     }
-
     draw() {
         ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText(`接住正確答案: ${this.problem.text}`, GAME_WIDTH/2, TEXT_Y_POS);
-        drawEmoji(p1.emoji, this.p1X, 550, 60);
-        drawEmoji(p2.emoji, this.p2X, 550, 60);
-
+        drawEmoji(p1.emoji, this.p1X, 550, 60); drawEmoji(p2.emoji, this.p2X, 550, 60);
         this.items.forEach(item => {
             if (item.type === 'bomb') drawEmoji('💣', item.x, item.y, 40);
             else {
-                ctx.fillStyle = '#ecf0f1';
-                ctx.beginPath(); ctx.arc(item.x, item.y, 25, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = '#ecf0f1'; ctx.beginPath(); ctx.arc(item.x, item.y, 25, 0, Math.PI*2); ctx.fill();
                 ctx.fillStyle = 'black'; ctx.font = '20px Arial'; ctx.textBaseline = 'middle'; ctx.fillText(item.val, item.x, item.y);
             }
         });
     }
 }
 
-// --- 流程控制 ---
-
-function startNewGame() {
-    p1.score = 0; p2.score = 0;
-    p1.stun = 0; p2.stun = 0;
-    totalTime = 60;
-    modeDeck = []; 
-    currentState = STATE.MENU;
-}
-
-function selectNextMode() {
-    if (modeDeck.length === 0) {
-        modeDeck = [0, 1, 2, 3, 4];
-        for (let i = modeDeck.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [modeDeck[i], modeDeck[j]] = [modeDeck[j], modeDeck[i]];
-        }
-    }
-    
-    const nextIndex = modeDeck.pop();
-    const modes = [ShooterMode, GeometryMode, CubeMode, ChaseMode, RainMode];
-    
-    currentMode = new modes[nextIndex]();
-    currentMode.init();
-    
-    const instructions = ["射擊正確答案！", "數數三角形！", "數數積木！", "算出答案並搶奪！", "接住正確答案！"];
-    roundInstruction = instructions[nextIndex];
-    
-    currentState = STATE.INSTRUCTION;
-    timeRemaining = 120; 
-}
-
-function endGameRound(winner) {
-    roundWinner = winner;
-    currentState = STATE.ROUND_END;
-    timeRemaining = 60; 
-    effects = [];
-}
-
-// 結算初始化
-function initGameOver() {
-    winnerName = "";
-    inputActive = false;
-    
-    if (p1.score > p2.score) gameWinner = 'p1';
-    else if (p2.score > p1.score) gameWinner = 'p2';
-    else gameWinner = 'draw';
-
-    if (gameWinner !== 'draw') {
-        currentState = STATE.GAME_OVER_INPUT;
-        inputActive = true;
-    } else {
-        currentState = STATE.GAME_OVER_SHOW; // 平手不輸入名字
-    }
-}
-
-function saveScoreAndProceed() {
-    if (gameWinner !== 'draw' && winnerName.length >= 3) {
-        let scores = JSON.parse(localStorage.getItem(LEADERBOARD_KEY) || "[]");
-        let score = (gameWinner === 'p1') ? p1.score : p2.score;
-        scores.push({name: winnerName, score: score});
-        // 排序
-        scores.sort((a, b) => b.score - a.score);
-        if(scores.length > 10) scores = scores.slice(0, 10);
-        localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(scores));
-    }
-    currentState = STATE.GAME_OVER_SHOW;
-    inputActive = false;
-}
-
+// 循環更新
 function update() {
     frameCount++;
+    // 冷卻時間遞減
+    if (inputCooldown > 0) inputCooldown--;
+
     if (currentState === STATE.MENU) {
-        if (keys[' ']) { totalTime = 60; p1.score = 0; p2.score = 0; selectNextMode(); }
+        // 只有冷卻結束後才接受開始
+        if (keys[' '] && inputCooldown <= 0) { 
+            startNewGame(); 
+        }
     } else if (currentState === STATE.INSTRUCTION) {
         timeRemaining--;
         if (timeRemaining <= 0) currentState = STATE.PLAYING;
@@ -901,17 +767,16 @@ function update() {
         } else {
             currentMode.update();
             for(let i=effects.length-1; i>=0; i--) {
-                effects[i].y -= 1;
-                effects[i].life--;
-                if(effects[i].life <= 0) effects.splice(i, 1);
+                effects[i].y -= 1; effects[i].life--; if(effects[i].life <= 0) effects.splice(i, 1);
             }
         }
     } else if (currentState === STATE.ROUND_END) {
         timeRemaining--;
         if (timeRemaining <= 0) selectNextMode();
     } else if (currentState === STATE.GAME_OVER_INPUT || currentState === STATE.GAME_OVER_SHOW) {
-        if (currentState === STATE.GAME_OVER_SHOW && keys[' ']) {
-            startNewGame(); // 返回開始畫面
+        // 只有冷卻結束後才接受返回選單
+        if (currentState === STATE.GAME_OVER_SHOW && keys[' '] && inputCooldown <= 0) {
+            goToMenu(); 
         }
     }
 }
@@ -921,38 +786,24 @@ function draw() {
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
     if (currentState === STATE.MENU) {
-        // --- 繪製 Logo ---
         if (logoImage.src) {
-            // 在右上角繪製，寬度約100px
             try {
-                let logoW = 100;
-                let scale = logoW / logoImage.width;
-                let logoH = logoImage.height * scale;
-                // 注意：這裡假設圖片已經去背，如果是白色背景，canvas無法直接變成透明，需要使用者自行處理圖片檔案
+                let logoW = 100; let scale = logoW / logoImage.width; let logoH = logoImage.height * scale;
                 ctx.drawImage(logoImage, GAME_WIDTH - logoW - 20, 20, logoW, logoH);
             } catch(e) {
-                // 如果載入失敗，畫一個框
-                ctx.strokeStyle = 'white';
-                ctx.strokeRect(GAME_WIDTH - 120, 20, 100, 100);
+                ctx.strokeStyle = 'white'; ctx.strokeRect(GAME_WIDTH - 120, 20, 100, 100);
             }
         } else {
-            // 佔位框
-            ctx.strokeStyle = '#95a5a6';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(GAME_WIDTH - 120, 20, 100, 100);
-            ctx.fillStyle = '#95a5a6';
-            ctx.font = '12px Arial';
-            ctx.fillText("LOGO", GAME_WIDTH - 70, 70);
+            ctx.strokeStyle = '#95a5a6'; ctx.lineWidth = 2; ctx.strokeRect(GAME_WIDTH - 120, 20, 100, 100);
+            ctx.fillStyle = '#95a5a6'; ctx.font = '12px Arial'; ctx.fillText("LOGO", GAME_WIDTH - 70, 70);
         }
 
         ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.font = '50px "Press Start 2P"'; ctx.fillText("郭中數鬥大會", GAME_WIDTH/2, 250);
         ctx.font = '24px Noto Sans TC'; ctx.fillText("按 [空白鍵] 開始遊戲", GAME_WIDTH/2, 350);
         
-        ctx.textAlign = 'left';
-        ctx.fillStyle = p1.color; ctx.fillText(`${p1.emoji} 玩家 1: WASD (雙擊衝刺)`, 20, 500); // 靠最左
-        ctx.textAlign = 'right';
-        ctx.fillStyle = p2.color; ctx.fillText(`玩家 2: 方向鍵 (雙擊衝刺) ${p2.emoji}`, GAME_WIDTH - 20, 500);
+        ctx.textAlign = 'left'; ctx.fillStyle = p1.color; ctx.fillText(`${p1.emoji} 玩家 1: WASD (雙擊衝刺)`, 20, 500);
+        ctx.textAlign = 'right'; ctx.fillStyle = p2.color; ctx.fillText(`玩家 2: 方向鍵 (雙擊衝刺) ${p2.emoji}`, GAME_WIDTH - 20, 500);
 
     } else if (currentState === STATE.INSTRUCTION) {
         ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 60px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -960,26 +811,15 @@ function draw() {
         
     } else if (currentState === STATE.PLAYING) {
         currentMode.draw();
+        effects.forEach(e => { ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 20px Arial'; ctx.fillText(e.text, e.x, e.y); });
         
-        // Effects
-        effects.forEach(e => {
-            ctx.fillStyle = '#f1c40f'; ctx.font = 'bold 20px Arial';
-            ctx.fillText(e.text, e.x, e.y);
-        });
-        
-        // HUD Background
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, GAME_WIDTH, 40); 
-        
-        // 退出按鈕
-        ctx.fillStyle = '#c0392b';
-        ctx.fillRect(exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h);
+        ctx.fillStyle = '#c0392b'; ctx.fillRect(exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h);
         ctx.fillStyle = 'white'; ctx.font = 'bold 16px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText("退出", exitBtn.x + exitBtn.w/2, exitBtn.y + exitBtn.h/2);
 
-        // 時間與分數
-        ctx.fillStyle = totalTime < 10 ? '#e74c3c' : 'white';
-        ctx.font = '20px "Press Start 2P"'; 
-        ctx.fillText(`TIME: ${totalTime}`, GAME_WIDTH/2 + 50, 25); // 稍微右移避開按鈕
+        ctx.fillStyle = totalTime < 10 ? '#e74c3c' : 'white'; ctx.font = '20px "Press Start 2P"'; 
+        ctx.fillText(`TIME: ${totalTime}`, GAME_WIDTH/2 + 50, 25); 
 
         ctx.textAlign = 'left'; ctx.fillStyle = p1.color; ctx.fillText(`${p1.emoji} ${p1.score}`, 20, 28);
         ctx.textAlign = 'right'; ctx.fillStyle = p2.color; ctx.fillText(`${p2.score} ${p2.emoji}`, GAME_WIDTH - 20, 28);
@@ -994,88 +834,45 @@ function draw() {
         } else ctx.fillText("時間到!", GAME_WIDTH/2, GAME_HEIGHT/2);
 
     } else if (currentState === STATE.GAME_OVER_INPUT || currentState === STATE.GAME_OVER_SHOW) {
-        // 三欄式佈局背景
-        ctx.fillStyle = '#2c3e50';
-        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-        
-        // 分隔線
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
+        ctx.fillStyle = '#2c3e50'; ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 2; ctx.beginPath();
         ctx.moveTo(GAME_WIDTH/3, 50); ctx.lineTo(GAME_WIDTH/3, GAME_HEIGHT-50);
-        ctx.moveTo(GAME_WIDTH*2/3, 50); ctx.lineTo(GAME_WIDTH*2/3, GAME_HEIGHT-50);
-        ctx.stroke();
+        ctx.moveTo(GAME_WIDTH*2/3, 50); ctx.lineTo(GAME_WIDTH*2/3, GAME_HEIGHT-50); ctx.stroke();
 
-        // --- 左欄 (P1) ---
         let col1Center = GAME_WIDTH/6;
         ctx.fillStyle = p1.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.font = '40px sans-serif'; ctx.fillText(p1.emoji, col1Center, 150);
         ctx.font = '30px Noto Sans TC'; ctx.fillText("Player 1", col1Center, 220);
         ctx.font = '50px "Press Start 2P"'; ctx.fillText(p1.score, col1Center, 300);
-        
         let p1Status = (gameWinner === 'p1') ? "勝利!" : (gameWinner === 'draw' ? "平手" : "落敗…");
-        ctx.fillStyle = (gameWinner === 'p1') ? '#f1c40f' : '#95a5a6';
-        ctx.font = '40px Noto Sans TC'; ctx.fillText(p1Status, col1Center, 400);
+        ctx.fillStyle = (gameWinner === 'p1') ? '#f1c40f' : '#95a5a6'; ctx.font = '40px Noto Sans TC'; ctx.fillText(p1Status, col1Center, 400);
 
-        // --- 右欄 (P2) ---
         let col3Center = GAME_WIDTH * 5/6;
-        ctx.fillStyle = p2.color;
-        ctx.font = '40px sans-serif'; ctx.fillText(p2.emoji, col3Center, 150);
+        ctx.fillStyle = p2.color; ctx.font = '40px sans-serif'; ctx.fillText(p2.emoji, col3Center, 150);
         ctx.font = '30px Noto Sans TC'; ctx.fillText("Player 2", col3Center, 220);
         ctx.font = '50px "Press Start 2P"'; ctx.fillText(p2.score, col3Center, 300);
-        
         let p2Status = (gameWinner === 'p2') ? "勝利!" : (gameWinner === 'draw' ? "平手" : "落敗…");
-        ctx.fillStyle = (gameWinner === 'p2') ? '#f1c40f' : '#95a5a6';
-        ctx.font = '40px Noto Sans TC'; ctx.fillText(p2Status, col3Center, 400);
+        ctx.fillStyle = (gameWinner === 'p2') ? '#f1c40f' : '#95a5a6'; ctx.font = '40px Noto Sans TC'; ctx.fillText(p2Status, col3Center, 400);
 
-        // --- 中欄 (排行榜/輸入) ---
         let col2Center = GAME_WIDTH / 2;
-        
         if (currentState === STATE.GAME_OVER_INPUT) {
-            ctx.fillStyle = 'white';
-            ctx.font = '24px Noto Sans TC'; 
-            ctx.fillText("恭喜勝利!", col2Center, 150);
-            ctx.fillText("請輸入名字 (3-5字):", col2Center, 200);
-            
-            // 輸入框模擬
-            ctx.fillStyle = 'rgba(0,0,0,0.5)';
-            ctx.fillRect(col2Center - 100, 250, 200, 50);
-            ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3;
-            ctx.strokeRect(col2Center - 100, 250, 200, 50);
-            
-            ctx.fillStyle = '#f1c40f';
-            ctx.font = '30px "Press Start 2P"';
-            ctx.fillText(winnerName + (frameCount % 60 < 30 ? "_" : ""), col2Center, 290);
-            
-            ctx.fillStyle = '#bdc3c7';
-            ctx.font = '16px Noto Sans TC';
-            ctx.fillText("按 Enter 確認", col2Center, 350);
-
+            ctx.fillStyle = 'white'; ctx.font = '24px Noto Sans TC'; 
+            ctx.fillText("恭喜勝利!", col2Center, 150); ctx.fillText("請輸入名字 (3-5字):", col2Center, 200);
+            ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(col2Center - 100, 250, 200, 50);
+            ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 3; ctx.strokeRect(col2Center - 100, 250, 200, 50);
+            ctx.fillStyle = '#f1c40f'; ctx.font = '30px "Press Start 2P"'; ctx.fillText(winnerName + (frameCount % 60 < 30 ? "_" : ""), col2Center, 290);
+            ctx.fillStyle = '#bdc3c7'; ctx.font = '16px Noto Sans TC'; ctx.fillText("按 Enter 確認", col2Center, 350);
         } else {
-            // 顯示排行榜
-            ctx.fillStyle = '#f1c40f';
-            ctx.font = '24px Noto Sans TC';
-            ctx.fillText("🏆 排行榜 🏆", col2Center, 100);
-            
+            ctx.fillStyle = '#f1c40f'; ctx.font = '24px Noto Sans TC'; ctx.fillText("🏆 排行榜 🏆", col2Center, 100);
             let scores = JSON.parse(localStorage.getItem(LEADERBOARD_KEY) || "[]");
-            ctx.font = '16px Noto Sans TC';
-            ctx.fillStyle = 'white';
-            
+            ctx.font = '16px Noto Sans TC'; ctx.fillStyle = 'white';
             for(let i=0; i<Math.min(10, scores.length); i++) {
                 let y = 150 + i * 30;
-                // 排名
                 ctx.textAlign = 'right'; ctx.fillText(`${i+1}.`, col2Center - 60, y);
-                // 名字
                 ctx.textAlign = 'left'; ctx.fillText(scores[i].name, col2Center - 40, y);
-                // 分數
                 ctx.textAlign = 'right'; ctx.fillText(scores[i].score, col2Center + 80, y);
             }
-            
-            // 底部提示
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#ecf0f1';
-            ctx.font = '20px Noto Sans TC';
-            ctx.fillText("按 [空白鍵] 返回主選單", col2Center, 550);
+            ctx.textAlign = 'center'; ctx.fillStyle = '#ecf0f1'; ctx.font = '20px Noto Sans TC'; ctx.fillText("按 [空白鍵] 返回主選單", col2Center, 550);
         }
     }
 }
