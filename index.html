@@ -61,8 +61,8 @@
 
 <script>
 /**
- * 郭中數鬥大會 v8.0
- * 更新：奪寶進度歸零、數積木指定9題庫
+ * 郭中數鬥大會 v8.5
+ * 修正：數三角形選項重複問題、答案改為6、按鍵防連點鎖定
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -70,7 +70,7 @@ const ctx = canvas.getContext('2d');
 
 // --- Logo 設定 ---
 const logoImage = new Image();
-logoImage.src = 'logo2.png'; // 請在此填入您的 Logo 圖片路徑或 Base64
+logoImage.src = 'logo2.png'; 
 
 // --- 全局變數 ---
 const GAME_WIDTH = 800;
@@ -90,7 +90,7 @@ let currentState = STATE.MENU;
 let frameCount = 0;
 let totalTime = 60;
 let timeRemaining = 0;
-let inputCooldown = 0; 
+let spaceLock = false; // 空白鍵鎖定 (必須放開才能再次觸發)
 
 // 玩家配置
 const p1 = { score: 0, color: '#3498db', name: 'Player 1', emoji: '🤖', lastKey: null, lastKeyTime: 0, dash: false, stun: 0 };
@@ -130,10 +130,24 @@ function drawEmoji(emoji, x, y, size) {
     ctx.fillText(emoji, x, y);
 }
 
+// 產生不重複的選項陣列
+function generateUniqueOptions(correct, count=4) {
+    let opts = new Set();
+    opts.add(correct);
+    while(opts.size < count) {
+        // 產生錯誤答案，範圍在正確答案 +- 5 之間，且不為負
+        let wrong = correct + randomInt(-5, 5);
+        if(wrong <= 0) wrong = correct + randomInt(1, 5);
+        if(wrong !== correct) opts.add(wrong);
+    }
+    return Array.from(opts).sort(() => Math.random() - 0.5);
+}
+
 const exitBtn = { x: 280, y: 10, w: 80, h: 30 };
 
 // --- 輸入處理 ---
 window.addEventListener('keydown', (e) => {
+    // 名字輸入
     if (currentState === STATE.GAME_OVER_INPUT && inputActive) {
         if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
             if (winnerName.length < 5) winnerName += e.key.toUpperCase();
@@ -170,6 +184,11 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     const key = e.key.toLowerCase();
     keys[key] = false;
+    
+    // 如果放開空白鍵，解除鎖定
+    if (e.code === 'Space') {
+        spaceLock = false;
+    }
 });
 
 canvas.addEventListener('mousedown', (e) => {
@@ -188,7 +207,7 @@ canvas.addEventListener('mousedown', (e) => {
 
 function goToMenu() {
     currentState = STATE.MENU;
-    inputCooldown = 30; 
+    spaceLock = true; // 進入選單時鎖定空白鍵，防止誤觸
     for (let k in keys) keys[k] = false;
 }
 
@@ -232,7 +251,7 @@ function endGameRound(winner) {
 function initGameOver() {
     winnerName = "";
     inputActive = false;
-    inputCooldown = 30; 
+    spaceLock = true; // 進入結算時鎖定
     
     if (p1.score > p2.score) gameWinner = 'p1';
     else if (p2.score > p1.score) gameWinner = 'p2';
@@ -257,65 +276,39 @@ function saveScoreAndProceed() {
     }
     currentState = STATE.GAME_OVER_SHOW;
     inputActive = false;
-    inputCooldown = 30; 
+    spaceLock = true; // 切換狀態時鎖定
 }
 
 // --- 題目生成器 ---
 function generateProblem(forceType = -1) {
     const difficulty = Math.min(1, (60 - totalTime) / 50); 
-    
     let type;
-    if (forceType !== -1) {
-        type = forceType;
-    } else {
+    if (forceType !== -1) type = forceType;
+    else {
         let r = Math.random();
         if (difficulty < 0.3) type = (r > 0.6) ? 1 : 0; 
         else if (difficulty < 0.6) type = (r > 0.4) ? 1 : (r > 0.8 ? 2 : 0);
         else type = (r > 0.5) ? 2 : 1;
     }
 
-    let q = "", a = 0, options = [];
-
-    if (type === 0) { // 加減
+    let q = "", a = 0;
+    if (type === 0) { 
         let max = 10 + Math.floor(difficulty * 40);
         let n1 = randomInt(1, max);
         let n2 = randomInt(1, max);
-        if (Math.random() > 0.5) {
-            q = `${n1} + ${n2} = ?`;
-            a = n1 + n2;
-        } else {
-            let big = Math.max(n1, n2);
-            let small = Math.min(n1, n2);
-            q = `${big} - ${small} = ?`;
-            a = big - small;
-        }
-    } else if (type === 1) { // 乘法
+        if (Math.random() > 0.5) { q = `${n1} + ${n2} = ?`; a = n1 + n2; }
+        else { let big = Math.max(n1, n2); let small = Math.min(n1, n2); q = `${big} - ${small} = ?`; a = big - small; }
+    } else if (type === 1) { 
         let maxMulti = 3 + Math.floor(difficulty * 8); 
-        let n1 = randomInt(2, maxMulti);
-        let n2 = randomInt(2, maxMulti);
-        q = `${n1} × ${n2} = ?`;
-        a = n1 * n2;
-    } else { // 數列
-        let start = randomInt(1, 10);
-        let step = randomInt(2, 5);
-        let idx = randomInt(2, 4); 
-        let seq = [];
-        for(let i=0; i<5; i++) seq.push(start + i*step);
-        a = seq[idx];
-        seq[idx] = '?';
-        q = seq.join(', ');
+        let n1 = randomInt(2, maxMulti); let n2 = randomInt(2, maxMulti);
+        q = `${n1} × ${n2} = ?`; a = n1 * n2;
+    } else { 
+        let start = randomInt(1, 10); let step = randomInt(2, 5); let idx = randomInt(2, 4); 
+        let seq = []; for(let i=0; i<5; i++) seq.push(start + i*step);
+        a = seq[idx]; seq[idx] = '?'; q = seq.join(', ');
     }
 
-    while(options.length < 3) {
-        let offset = randomInt(-5, 5);
-        if (offset === 0) continue;
-        let wrong = a + offset;
-        if (wrong < 0) wrong = Math.abs(wrong);
-        if (wrong !== a && !options.includes(wrong)) options.push(wrong);
-    }
-    options.push(a); 
-    options.sort(() => Math.random() - 0.5);
-
+    let options = generateUniqueOptions(a, 4);
     return { text: q, answer: a, options: options };
 }
 
@@ -429,13 +422,14 @@ class ShooterMode extends GameMode {
     }
 }
 
-// Mode 2: 數幾何圖形
+// Mode 2: 數幾何圖形 (更新：選項不重複 + Preset 3答案改6)
 class GeometryMode extends GameMode {
     constructor() {
         super();
         this.problem.text = "圖中共有多少個三角形？";
         
         let seed = Math.random();
+        
         if (seed < 0.25) {
             this.preset = 0;
             let segments, layers, count;
@@ -450,22 +444,15 @@ class GeometryMode extends GameMode {
         } else if (seed < 0.75) {
             this.preset = 2; this.problem.answer = 5;
         } else {
-            this.preset = 3; this.problem.answer = 5;
+            // Preset 3: 不規則分割，答案設定為 6
+            this.preset = 3;
+            this.problem.answer = 6;
         }
 
-        this.options = { 'Up': 0, 'Down': 0, 'Left': 0, 'Right': 0 };
-        let keys = Object.keys(this.options);
-        let correctKey = keys[randomInt(0, 3)];
-        let count = this.problem.answer;
+        // 使用不重複選項生成
+        let uniqueOpts = generateUniqueOptions(this.problem.answer, 4);
         
-        keys.forEach(k => {
-            if (k === correctKey) this.options[k] = count;
-            else {
-                let n = count + randomInt(-2, 2);
-                while (n === count || n <= 0) n = count + randomInt(-3, 3);
-                this.options[k] = n;
-            }
-        });
+        this.options = { 'Up': uniqueOpts[0], 'Down': uniqueOpts[1], 'Left': uniqueOpts[2], 'Right': uniqueOpts[3] };
     }
 
     update() {
@@ -546,33 +533,29 @@ class GeometryMode extends GameMode {
     }
 }
 
-// Mode 3: 數積木 (指定9題)
+// Mode 3: 數積木
 class CubeMode extends GeometryMode {
     constructor() {
         super();
         this.preset = -1; 
         this.problem.text = "數數有多少個積木？";
         
-        // 定義9個特定形狀 (x, y是網格坐標, h是高度)
-        // 這些結構對應您圖片中的9種積木組合
         const cubePresets = [
-            [{x:0, y:1, h:2}, {x:1, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}], // T型變體 (5)
-            [{x:1, y:1, h:2}, {x:0, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}, {x:1, y:2, h:1}], // 十字高塔 (6)
-            [{x:1, y:1, h:2}, {x:0, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}, {x:1, y:2, h:1}], // 十字高塔變色 (6)
-            [{x:1, y:1, h:2}, {x:0, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}], // T型 (5)
-            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:2, y:1, h:1}, {x:0, y:0, h:1}, {x:1, y:0, h:1}], // 階梯型 (7)
-            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:0, y:0, h:1}, {x:1, y:0, h:2}], // 2x2缺角 (7)
-            [{x:0, y:1, h:2}, {x:1, y:1, h:1}, {x:2, y:1, h:1}, {x:0, y:0, h:1}], // 角落型 (5)
-            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:0, y:0, h:1}, {x:1, y:0, h:1}], // 頒獎台 (6)
-            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:0, y:0, h:2}, {x:1, y:0, h:1}]  // 2x2缺頂 (7)
+            [{x:0, y:1, h:2}, {x:1, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}], 
+            [{x:1, y:1, h:2}, {x:0, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}, {x:1, y:2, h:1}], 
+            [{x:1, y:1, h:2}, {x:0, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}, {x:1, y:2, h:1}], 
+            [{x:1, y:1, h:2}, {x:0, y:1, h:1}, {x:2, y:1, h:1}, {x:1, y:0, h:1}], 
+            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:2, y:1, h:1}, {x:0, y:0, h:1}, {x:1, y:0, h:1}], 
+            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:0, y:0, h:1}, {x:1, y:0, h:2}], 
+            [{x:0, y:1, h:2}, {x:1, y:1, h:1}, {x:2, y:1, h:1}, {x:0, y:0, h:1}], 
+            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:0, y:0, h:1}, {x:1, y:0, h:1}], 
+            [{x:0, y:1, h:2}, {x:1, y:1, h:2}, {x:0, y:0, h:2}, {x:1, y:0, h:1}]  
         ];
 
-        // 隨機選一題
         let choice = cubePresets[randomInt(0, cubePresets.length - 1)];
         this.cubes = [];
         let totalCubes = 0;
 
-        // 建構積木並計算總數
         choice.forEach(block => {
             for(let z=0; z<block.h; z++) {
                 this.cubes.push({gx: block.x, gy: block.y, gz: z});
@@ -581,23 +564,14 @@ class CubeMode extends GeometryMode {
         });
 
         this.problem.answer = totalCubes;
-        this.options = { 'Up': 0, 'Down': 0, 'Left': 0, 'Right': 0 };
-        let keys = Object.keys(this.options); let correctKey = keys[randomInt(0, 3)];
         
-        keys.forEach(k => {
-            if (k === correctKey) this.options[k] = totalCubes;
-            else {
-                let n = totalCubes + randomInt(-3, 3);
-                while (n === totalCubes || n <= 0) n = totalCubes + randomInt(-4, 4);
-                this.options[k] = n;
-            }
-        });
+        let uniqueOpts = generateUniqueOptions(totalCubes, 4);
+        this.options = { 'Up': uniqueOpts[0], 'Down': uniqueOpts[1], 'Left': uniqueOpts[2], 'Right': uniqueOpts[3] };
     }
     draw() {
         ctx.fillStyle = 'white'; ctx.font = '30px Noto Sans TC'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillText(this.problem.text, GAME_WIDTH/2, TEXT_Y_POS);
         let originX = GAME_WIDTH / 2; let originY = 380; let size = 40;     
-        // 排序以確保正確遮擋
         this.cubes.sort((a, b) => {
             let depthA = a.gx + a.gy; let depthB = b.gx + b.gy;
             if (depthA !== depthB) return depthA - depthB; return a.gz - b.gz;
@@ -667,9 +641,7 @@ class ChaseMode extends GameMode {
         }
     }
     performSteal(stealer, victim, victimPos) {
-        this.holder = stealer; 
-        this.holdTime = 0; // 重置進度！
-        this.stealCooldown = 60; 
+        this.holder = stealer; this.holdTime = 0; this.stealCooldown = 60; 
         victimPos.x += (stealer === p1 ? 60 : -60); effects.push({text: "STEAL!", x: victimPos.x, y: victimPos.y, life: 30});
     }
     draw() {
@@ -738,10 +710,10 @@ class RainMode extends GameMode {
 // 循環更新
 function update() {
     frameCount++;
-    if (inputCooldown > 0) inputCooldown--;
 
     if (currentState === STATE.MENU) {
-        if (keys[' '] && inputCooldown <= 0) { 
+        // 只有未鎖定且按下空白鍵時才開始
+        if (keys[' '] && !spaceLock) { 
             startNewGame(); 
         }
     } else if (currentState === STATE.INSTRUCTION) {
@@ -761,7 +733,7 @@ function update() {
         timeRemaining--;
         if (timeRemaining <= 0) selectNextMode();
     } else if (currentState === STATE.GAME_OVER_INPUT || currentState === STATE.GAME_OVER_SHOW) {
-        if (currentState === STATE.GAME_OVER_SHOW && keys[' '] && inputCooldown <= 0) {
+        if (currentState === STATE.GAME_OVER_SHOW && keys[' '] && !spaceLock) {
             goToMenu(); 
         }
     }
