@@ -61,8 +61,8 @@
 
 <script>
 /**
- * 郭中數鬥大會 v8.5
- * 修正：數三角形選項重複問題、答案改為6、按鍵防連點鎖定
+ * 郭中數鬥大會 v9.0
+ * 修正：Logo路徑更新、題目與選項重疊問題修復
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -70,12 +70,12 @@ const ctx = canvas.getContext('2d');
 
 // --- Logo 設定 ---
 const logoImage = new Image();
-logoImage.src = 'logo2.png'; 
+logoImage.src = 'logo2.png'; // 已更新為您的檔案名稱
 
 // --- 全局變數 ---
 const GAME_WIDTH = 800;
 const GAME_HEIGHT = 600;
-const TEXT_Y_POS = 130;
+const TEXT_Y_POS = 80; // 修正：上移題目文字，避免與按鈕重疊
 
 const STATE = {
     MENU: 0,
@@ -90,7 +90,7 @@ let currentState = STATE.MENU;
 let frameCount = 0;
 let totalTime = 60;
 let timeRemaining = 0;
-let spaceLock = false; // 空白鍵鎖定 (必須放開才能再次觸發)
+let spaceLock = false;
 
 // 玩家配置
 const p1 = { score: 0, color: '#3498db', name: 'Player 1', emoji: '🤖', lastKey: null, lastKeyTime: 0, dash: false, stun: 0 };
@@ -130,12 +130,10 @@ function drawEmoji(emoji, x, y, size) {
     ctx.fillText(emoji, x, y);
 }
 
-// 產生不重複的選項陣列
 function generateUniqueOptions(correct, count=4) {
     let opts = new Set();
     opts.add(correct);
     while(opts.size < count) {
-        // 產生錯誤答案，範圍在正確答案 +- 5 之間，且不為負
         let wrong = correct + randomInt(-5, 5);
         if(wrong <= 0) wrong = correct + randomInt(1, 5);
         if(wrong !== correct) opts.add(wrong);
@@ -147,7 +145,6 @@ const exitBtn = { x: 280, y: 10, w: 80, h: 30 };
 
 // --- 輸入處理 ---
 window.addEventListener('keydown', (e) => {
-    // 名字輸入
     if (currentState === STATE.GAME_OVER_INPUT && inputActive) {
         if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
             if (winnerName.length < 5) winnerName += e.key.toUpperCase();
@@ -184,8 +181,6 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     const key = e.key.toLowerCase();
     keys[key] = false;
-    
-    // 如果放開空白鍵，解除鎖定
     if (e.code === 'Space') {
         spaceLock = false;
     }
@@ -207,7 +202,7 @@ canvas.addEventListener('mousedown', (e) => {
 
 function goToMenu() {
     currentState = STATE.MENU;
-    spaceLock = true; // 進入選單時鎖定空白鍵，防止誤觸
+    spaceLock = true; 
     for (let k in keys) keys[k] = false;
 }
 
@@ -251,7 +246,7 @@ function endGameRound(winner) {
 function initGameOver() {
     winnerName = "";
     inputActive = false;
-    spaceLock = true; // 進入結算時鎖定
+    spaceLock = true; 
     
     if (p1.score > p2.score) gameWinner = 'p1';
     else if (p2.score > p1.score) gameWinner = 'p2';
@@ -276,7 +271,7 @@ function saveScoreAndProceed() {
     }
     currentState = STATE.GAME_OVER_SHOW;
     inputActive = false;
-    spaceLock = true; // 切換狀態時鎖定
+    spaceLock = true; 
 }
 
 // --- 題目生成器 ---
@@ -422,7 +417,7 @@ class ShooterMode extends GameMode {
     }
 }
 
-// Mode 2: 數幾何圖形 (更新：選項不重複 + Preset 3答案改6)
+// Mode 2: 數幾何圖形
 class GeometryMode extends GameMode {
     constructor() {
         super();
@@ -444,14 +439,10 @@ class GeometryMode extends GameMode {
         } else if (seed < 0.75) {
             this.preset = 2; this.problem.answer = 5;
         } else {
-            // Preset 3: 不規則分割，答案設定為 6
-            this.preset = 3;
-            this.problem.answer = 6;
+            this.preset = 3; this.problem.answer = 6;
         }
 
-        // 使用不重複選項生成
         let uniqueOpts = generateUniqueOptions(this.problem.answer, 4);
-        
         this.options = { 'Up': uniqueOpts[0], 'Down': uniqueOpts[1], 'Left': uniqueOpts[2], 'Right': uniqueOpts[3] };
     }
 
@@ -474,7 +465,7 @@ class GeometryMode extends GameMode {
         ctx.fillText(this.problem.text, GAME_WIDTH/2, TEXT_Y_POS);
 
         const topX = GAME_WIDTH / 2;
-        const topY = 200; 
+        const topY = 230; // 下移圖形
         const baseY = 460;
         const baseWidth = 300;
         const leftX = topX - baseWidth / 2;
@@ -526,7 +517,8 @@ class GeometryMode extends GameMode {
             ctx.beginPath(); ctx.moveTo(dX, dY); ctx.lineTo(dX, baseY); ctx.stroke();
         }
 
-        this.drawOptionText(this.options.Up, GAME_WIDTH/2, 120, '↑ W');
+        // 修正：上方選項按鈕位置下移至 160
+        this.drawOptionText(this.options.Up, GAME_WIDTH/2, 160, '↑ W');
         this.drawOptionText(this.options.Down, GAME_WIDTH/2, 550, '↓ S');
         this.drawOptionText(this.options.Left, 100, 300, '← A');
         this.drawOptionText(this.options.Right, 700, 300, '→ D');
@@ -580,7 +572,8 @@ class CubeMode extends GeometryMode {
             let x = (c.gx - c.gy) * size + originX; let y = (c.gx + c.gy) * size * 0.5 - (c.gz * size) + originY;
             this.drawCube(x, y, size);
         });
-        this.drawOptionText(this.options.Up, GAME_WIDTH/2, 120, '↑ W');
+        // 修正：上方選項按鈕位置下移至 160
+        this.drawOptionText(this.options.Up, GAME_WIDTH/2, 160, '↑ W');
         this.drawOptionText(this.options.Down, GAME_WIDTH/2, 550, '↓ S');
         this.drawOptionText(this.options.Left, 100, 300, '← A');
         this.drawOptionText(this.options.Right, 700, 300, '→ D');
